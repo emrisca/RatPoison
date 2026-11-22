@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.emrisca.RatPoison</id>
+  <name>RatPoison</name>
+  <summary>Lightning-fast, keyboard-driven mouse control utility</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="io.github.emrisca">
+    <name>Emrisca</name>
+  </developer>
+  <description>
+    <p>
+      RatPoison is a high-performance, memory-safe Rust + Tauri v2 keyboard-driven mouse replacement utility inspired by Mouseless.
+    </p>
+    <p>
+      Features include:
+    </p>
+    <ul>
+      <li>Two-stage recursive Grid and Subgrid cursor targeting across multi-monitor setups</li>
+      <li>Continuous Free Mode ballistic cursor control with spring-damper physics</li>
+      <li>OS Accessibility Tree Label Mode (AT-SPI2, macOS AXUIElement, Windows UIAutomation) with prefix-free home-row hint badges</li>
+      <li>Wayland XDG Desktop Portal (GlobalShortcuts and RemoteDesktop) and uinput virtual HID support</li>
+    </ul>
+  </description>
+  <url type="homepage">https://github.com/emrisca/RatPoison</url>
+  <url type="bugtracker">https://github.com/emrisca/RatPoison/issues</url>
+  <launchable type="desktop-id">io.github.emrisca.RatPoison.desktop</launchable>
+  <provides>
+    <binary>ratpoison</binary>
+  </provides>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.1.0" date="2026-11-22">
+      <description>
+        <p>Initial cross-platform release with Grid Mode, Free Mode, and Accessibility Tree Label Mode.</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -1,0 +1,72 @@
+:root,
+:root[data-theme='dark'] {
+  /* Surfaces */
+  --rp-bg-app: #0c0f15;
+  --rp-bg-sidebar: #11151e;
+  --rp-bg-surface: #161b26;
+  --rp-bg-elevated: #1e2534;
+  --rp-bg-hover: rgba(148, 163, 184, 0.1);
+  --rp-bg-input: #0e121a;
+
+  /* Borders */
+  --rp-border-subtle: rgba(148, 163, 184, 0.14);
+  --rp-border-strong: rgba(148, 163, 184, 0.28);
+
+  /* Text */
+  --rp-text-primary: #f1f5f9;
+  --rp-text-secondary: #94a3b8;
+  --rp-text-muted: #64748b;
+
+  /* Accents & Semantic */
+  --rp-accent: #38bdf8;
+  --rp-accent-hover: #7dd3fc;
+  --rp-accent-soft: rgba(56, 189, 248, 0.14);
+  --rp-modified-dot: #f59e0b;
+  --rp-modified-soft: rgba(245, 158, 11, 0.16);
+  --rp-success: #22c55e;
+  --rp-danger: #f43f5e;
+  --rp-danger-soft: rgba(244, 63, 94, 0.15);
+
+  /* Typography */
+  --rp-font-sans: 'SF Pro Text', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --rp-font-mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+
+  /* Radii & Shadows */
+  --rp-radius-sm: 6px;
+  --rp-radius-md: 10px;
+  --rp-radius-lg: 14px;
+  --rp-shadow-menu: 0 14px 36px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(148, 163, 184, 0.2);
+  --rp-shadow-toast: 0 10px 26px rgba(0, 0, 0, 0.45);
+
+  /* Motion */
+  --rp-ease-snappy: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --rp-duration-fast: 110ms;
+}
+
+:root[data-theme='light'] {
+  --rp-bg-app: #f6f8fb;
+  --rp-bg-sidebar: #eef2f7;
+  --rp-bg-surface: #ffffff;
+  --rp-bg-elevated: #f8fafc;
+  --rp-bg-hover: rgba(15, 23, 42, 0.06);
+  --rp-bg-input: #ffffff;
+
+  --rp-border-subtle: rgba(15, 23, 42, 0.1);
+  --rp-border-strong: rgba(15, 23, 42, 0.22);
+
+  --rp-text-primary: #0f172a;
+  --rp-text-secondary: #475569;
+  --rp-text-muted: #64748b;
+
+  --rp-accent: #0284c7;
+  --rp-accent-hover: #0369a1;
+  --rp-accent-soft: rgba(2, 132, 199, 0.12);
+  --rp-modified-dot: #d97706;
+  --rp-modified-soft: rgba(217, 119, 6, 0.14);
+  --rp-success: #16a34a;
+  --rp-danger: #e11d48;
+  --rp-danger-soft: rgba(225, 29, 72, 0.12);
+
+  --rp-shadow-menu: 0 12px 32px rgba(15, 23, 42, 0.16), 0 0 0 1px rgba(15, 23, 42, 0.12);
+  --rp-shadow-toast: 0 10px 24px rgba(15, 23, 42, 0.14);
+}

@@ -1,0 +1,58 @@
+app-id: io.github.emrisca.RatPoison
+runtime: org.gnome.Platform
+runtime-version: '47'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.node20
+command: ratpoison
+
+finish-args:
+  # Display server sockets: Wayland primary, X11/XWayland fallback
+  - --socket=wayland
+  - --socket=fallback-x11
+  # Shared memory for X11/WebKitGTK compositing
+  - --share=ipc
+  # Network access for optional license activation and signed release update checks
+  - --share=network
+  # Hardware acceleration & uinput / evdev input injection fallback (--device=all includes /dev/uinput & DRI;
+  # --device=input explicitly documents evdev/uinput intent for Flathub review)
+  - --device=all
+  - --device=input
+  # D-Bus access to the AT-SPI2 Accessibility Bus for Label Mode DOM/widget tree traversal
+  - --talk-name=org.a11y.Bus
+  # D-Bus access to XDG Desktop Portal (GlobalShortcuts + RemoteDesktop / EIS input injection)
+  - --talk-name=org.freedesktop.portal.Desktop
+  # System tray / StatusNotifierItem support
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # Persistent user configuration directory (~/.config/ratpoison)
+  - --filesystem=xdg-config/ratpoison:create
+  # Force toolkits and browsers inside/interfacing with the session to expose AT-SPI2 trees
+  - --env=ACCESSIBILITY_ENABLED=1
+  - --env=GNOME_ACCESSIBILITY=1
+  - --env=QT_ACCESSIBILITY=1
+  - --env=QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
+  - --env=GTK_MODULES=gail:atk-bridge
+  - --env=WEBKIT_DISABLE_DMABUF_RENDERER=0
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node20/bin
+  env:
+    CARGO_HOME: /run/build/ratpoison/cargo
+
+modules:
+  - name: ratpoison
+    buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network
+    build-commands:
+      - npm --prefix frontend ci
+      - npm --prefix frontend run build
+      - cargo build --release --manifest-path src-tauri/Cargo.toml
+      - install -Dm755 src-tauri/target/release/ratpoison /app/bin/ratpoison
+      - install -Dm644 packaging/flatpak/io.github.emrisca.RatPoison.metainfo.xml /app/share/metainfo/io.github.emrisca.RatPoison.metainfo.xml
+      - install -Dm644 packaging/flatpak/99-ratpoison-uinput.rules /app/lib/udev/rules.d/99-ratpoison-uinput.rules
+    sources:
+      - type: dir
+        path: ../..

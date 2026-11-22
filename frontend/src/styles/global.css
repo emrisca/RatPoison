@@ -1,0 +1,62 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  font-family: var(--rp-font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Strict transparent, click-through isolation for the Overlay WebView */
+html[data-view='overlay'],
+html[data-view='overlay'] body,
+html[data-view='overlay'] #root {
+  background: transparent !important;
+  overflow: hidden;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* Native-feeling desktop window styling for Settings WebView */
+html[data-view='settings'],
+html[data-view='settings'] body,
+html[data-view='settings'] #root {
+  background: var(--rp-bg-app);
+  color: var(--rp-text-primary);
+  overflow: hidden;
+}
+
+code,
+pre {
+  font-family: var(--rp-font-mono);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+@keyframes rp-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.rp-spin {
+  animation: rp-spin 0.9s linear infinite;
+}

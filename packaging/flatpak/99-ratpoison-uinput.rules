@@ -1,0 +1,7 @@
+# RatPoison udev rule for unprivileged /dev/uinput virtual pointer & keyboard injection on Linux (Wayland/X11).
+# Install to /etc/udev/rules.d/99-ratpoison-uinput.rules and reload with:
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+# Ensure your user belongs to the 'input' group:
+#   sudo usermod -aG input $USER
+
+KERNEL=="uinput", SUBSYSTEM=="misc", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput", TAG+="uaccess"
