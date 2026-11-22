@@ -1,0 +1,13 @@
+[package]
+name = "ratpoison-tests"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ratpoison-core = { path = "../ratpoison-core" }
+ratpoison-hid = { path = "../ratpoison-hid" }
+ratpoison-a11y = { path = "../ratpoison-a11y" }
+ratpoison-license = { path = "../ratpoison-license" }
+serde.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
