@@ -57,8 +57,9 @@
     },
     "trayIcon": {
       "id": "ratpoison-tray",
-      "tooltip": "RatPoison — Keyboard-Driven Mouse Control",
-      "iconAsTemplate": true
+      "tooltip": "RatPoison \u2014 Keyboard-Driven Mouse Control",
+      "iconAsTemplate": true,
+      "iconPath": "icons/tray-icon.png"
     }
   },
   "bundle": {

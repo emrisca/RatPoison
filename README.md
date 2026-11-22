@@ -23,7 +23,7 @@ RatPoison/
 │   ├── ratpoison-license/             # 14-day trial, 5-seat licensing, offline Ed25519 protocol, multi-OS updater
 │   └── ratpoison-tests/               # Multi-monitor DPI matrix, Memory Hygiene security audit & E2E pipeline tests
 ├── frontend/                          # Vite 6 + React 19 + TypeScript Overlay & 8-tab Searchable Settings UI
-├── src-tauri/                         # Tauri v2 window config & scoped capabilities (io.github.emrisca.RatPoison)
+├── src-tauri/                         # Tauri v2 desktop binary, 10+ IPC commands, tray menu & app icons (io.github.emrisca.RatPoison)
 ├── packaging/flatpak/                 # Flathub Flatpak manifest, AppStream metainfo & udev uinput rules
 ├── .github/workflows/release.yml      # Cross-platform macOS / Windows / Linux build, signing & release pipeline
 └── docs/
@@ -35,8 +35,12 @@ RatPoison/
 ## Quick Verification
 
 ```bash
-# Run all 94 Rust unit, integration, security audit, and compile-fail tests
+# Run all 97 Rust unit, integration, security audit, compile-fail & Tauri shell tests
 cargo test --workspace
+cargo test --manifest-path src-tauri/Cargo.toml
+
+# Build the desktop binary (requires built frontend/dist)
+cargo build --manifest-path src-tauri/Cargo.toml
 
 # Enforce zero Clippy warnings across all workspace targets
 cargo clippy --workspace --all-targets -- -D warnings
