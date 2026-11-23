@@ -1,0 +1,46 @@
+/**
+ * Flat vector RatPoison rat mark derived directly from src-tauri/icons/icon.svg.
+ */
+export function RatBrandIcon({ size = 28 }: { size?: number }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="110 230 804 540"
+      width={size}
+      height={size}
+      aria-hidden="true"
+      className="rp-rat-svg"
+    >
+      <g fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M 252.26,512.66 C 209.51,495.40 199.02,448.79 208.70,409.08" strokeWidth="26" />
+        <path d="M 208.70,409.08 C 218.38,384.05 254.68,380.60 290.17,393.55" strokeWidth="26" />
+        <path d="M 300.66,486.77 C 276.46,447.92 274.04,396.14 311.14,367.65" strokeWidth="26" />
+        <path d="M 311.14,367.65 C 349.06,340.90 420.85,346.94 448.27,391.82" strokeWidth="26" />
+        <path d="M 448.27,391.82 C 463.60,424.62 453.92,471.23 427.30,504.03" strokeWidth="26" />
+        <path d="M 459.57,439.29 C 496.67,365.93 562.82,300.33 633.80,299.47" strokeWidth="26" />
+        <path d="M 633.80,299.47 C 704.79,298.61 761.26,367.65 787.07,462.60" strokeWidth="26" />
+        <path d="M 787.07,462.60 C 795.13,497.12 795.13,528.19 791.10,566.17" strokeWidth="26" />
+        <path d="M 252.26,517.84 C 222.41,540.28 182.08,567.90 149.81,594.65" strokeWidth="26" />
+        <path d="M 149.81,594.65 L 377.29,594.65" strokeWidth="26" />
+        <path d="M 416.01,588.61 L 748.35,583.43" strokeWidth="26" />
+        <path d="M 756.42,565.31 C 767.71,548.91 780.62,551.50 791.10,566.17" strokeWidth="22" />
+        <path d="M 794.33,535.10 C 851.60,539.42 879.83,567.90 878.22,616.23" strokeWidth="26" />
+        <path d="M 878.22,616.23 C 876.61,666.29 840.31,700.82 784.65,702.54" strokeWidth="26" />
+        <path d="M 784.65,702.54 L 611.22,702.54" strokeWidth="26" />
+        <path d="M 611.22,702.54 C 554.75,700.82 507.97,681.83 475.70,661.12" strokeWidth="26" />
+        <path d="M 791.10,566.17 C 820.95,583.43 825.79,620.55 804.81,646.44" strokeWidth="26" />
+        <path d="M 804.81,646.44 C 791.10,659.39 770.94,661.12 746.74,661.12" strokeWidth="26" />
+        <path d="M 746.74,661.12 L 475.70,661.12" strokeWidth="26" />
+        <path d="M 820.95,571.35 L 863.70,562.72" strokeWidth="18" />
+        <path d="M 820.14,605.01 L 866.12,616.23" strokeWidth="18" />
+        <path d="M 804.81,647.31 L 832.24,680.97" strokeWidth="18" />
+        <path d="M 753.19,661.12 L 749.96,700.82" strokeWidth="18" />
+        <path d="M 694.30,661.12 L 691.08,700.82" strokeWidth="18" />
+        <path d="M 625.74,661.12 L 622.51,700.82" strokeWidth="18" />
+        <path d="M 583.79,661.12 L 580.57,695.64" strokeWidth="18" />
+        <path d="M 541.04,661.12 L 537.81,683.56" strokeWidth="18" />
+        <circle cx="332.92" cy="536.83" r="18" fill="currentColor" stroke="none" />
+      </g>
+    </svg>
+  );
+}

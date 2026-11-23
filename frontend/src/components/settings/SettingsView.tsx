@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  Crosshair,
   Download,
   Grid3X3,
   Keyboard,
@@ -25,6 +24,7 @@ import { subscribeConfigUpdated } from '../../ipc/tauriBridge';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import type { PlatformOs, SettingsTabId } from '../../types/ipc';
 import { LiveOverlayPreview } from './LiveOverlayPreview';
+import { RatBrandIcon } from './RatBrandIcon';
 import { RestoreContextMenu } from './RestoreContextMenu';
 import { SettingControlByPath } from './SettingControls';
 import { UpdatesPanel } from './UpdatesPanel';
@@ -188,7 +188,7 @@ export function SettingsView() {
       <aside className="rp-sidebar">
         <div className="rp-brand">
           <div className="rp-brand-mark">
-            <Crosshair size={18} />
+            <RatBrandIcon size={26} />
           </div>
           <div>
             <div className="rp-brand-name">RatPoison</div>

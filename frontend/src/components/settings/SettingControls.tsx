@@ -110,7 +110,7 @@ function ColorPickerControl({ path }: { path: string }) {
   const value = useSettingsStore((s) => String(getByPath(s.config, path) ?? '#000000'));
   const updateSetting = useSettingsStore((s) => s.updateSetting);
 
-  const validHex = /^#[0-9a-fA-F]{6}$/.test(value) ? value : '#38bdf8';
+  const validHex = /^#[0-9a-fA-F]{6}$/.test(value) ? value : '#e17100';
 
   return (
     <div className="rp-color-control">

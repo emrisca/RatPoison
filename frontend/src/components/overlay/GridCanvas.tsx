@@ -219,7 +219,7 @@ function drawSubgridZoom(
   drawRoundedRect(ctx, tagX, tagY, tagW, 20, 4);
   ctx.fillStyle = app.subgridAccentColor;
   ctx.fill();
-  ctx.fillStyle = '#090d16';
+  ctx.fillStyle = '#0a0a0a';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.fillText(tagText, tagX + 8, tagY + 10);
@@ -256,7 +256,7 @@ function drawSubgridZoom(
     const coordX = Math.min(width - coordW - 6, chX + 10);
     const coordY = Math.min(height - 20, chY + 10);
     drawRoundedRect(ctx, coordX, coordY, coordW, 17, 3);
-    ctx.fillStyle = hexToRgba('#090d16', 0.85);
+    ctx.fillStyle = hexToRgba('#0a0a0a', 0.85);
     ctx.fill();
     ctx.fillStyle = app.crosshairColor;
     ctx.textAlign = 'left';

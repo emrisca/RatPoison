@@ -543,31 +543,31 @@ pub fn default_frontend_config_json_for_os(os: &str) -> Value {
         "keybindings": kb,
         "appearance": {
             "theme": "dark",
-            "gridBgColor": "#0b0e14",
-            "gridBgOpacity": 0.42,
-            "gridLineColor": "#94a3b8",
+            "gridBgColor": "#0a0a0a",
+            "gridBgOpacity": 0.46,
+            "gridLineColor": "#44403b",
             "gridLineWidth": 1,
-            "gridTextColor": "#f8fafc",
-            "gridAccentColor": "#f59e0b",
-            "gridFontFamily": "\"JetBrains Mono\", \"SF Mono\", Menlo, Consolas, monospace",
+            "gridTextColor": "#f5f5f5",
+            "gridAccentColor": "#e17100",
+            "gridFontFamily": "\"Geist Mono\", \"JetBrains Mono\", \"SF Mono\", Menlo, Consolas, monospace",
             "gridFontSize": 13,
             "gridFontWeight": 600,
-            "subgridAccentColor": "#38bdf8",
-            "subgridBgColor": "#0f172a",
-            "subgridBgOpacity": 0.86,
-            "crosshairColor": "#fb7185",
-            "labelBgColor": "#fef08a",
+            "subgridAccentColor": "#e17100",
+            "subgridBgColor": "#171717",
+            "subgridBgOpacity": 0.9,
+            "crosshairColor": "#f0b100",
+            "labelBgColor": "#e17100",
             "labelBgOpacity": 0.96,
-            "labelBorderColor": "#a16207",
-            "labelTextColor": "#111827",
-            "labelMatchPrefixColor": "#dc2626",
-            "labelFontFamily": "\"SF Pro Text\", \"Inter\", system-ui, -apple-system, sans-serif",
+            "labelBorderColor": "#973c00",
+            "labelTextColor": "#0a0a0a",
+            "labelMatchPrefixColor": "#fafafa",
+            "labelFontFamily": "\"Geist Mono\", \"JetBrains Mono\", \"SF Mono\", Menlo, Consolas, monospace",
             "labelFontSize": 12,
-            "labelBorderRadius": 5,
-            "hudBgColor": "#0f172a",
-            "hudTextColor": "#f8fafc",
-            "hudAccentColor": "#38bdf8",
-            "hudOpacity": 0.88,
+            "labelBorderRadius": 0,
+            "hudBgColor": "#171717",
+            "hudTextColor": "#f5f5f5",
+            "hudAccentColor": "#e17100",
+            "hudOpacity": 0.94,
             "reduceMotion": false
         },
         "updates": {
@@ -681,6 +681,22 @@ impl ConfigStore {
                         "keybindings.openSettings",
                         Value::String(native_open),
                     );
+                }
+
+                // Upgrade untouched legacy cyan/slate overlay appearance to Amber Mono 2.0
+                if get_json_path(&merged, "appearance.gridBgColor").and_then(Value::as_str)
+                    == Some("#0b0e14")
+                    && get_json_path(&merged, "appearance.subgridAccentColor")
+                        .and_then(Value::as_str)
+                        == Some("#38bdf8")
+                    && get_json_path(&merged, "appearance.hudAccentColor")
+                        .and_then(Value::as_str)
+                        == Some("#38bdf8")
+                {
+                    let fresh_defaults = default_frontend_config_json();
+                    if let Some(fresh_app) = fresh_defaults.get("appearance").cloned() {
+                        set_json_path(&mut merged, "appearance", fresh_app);
+                    }
                 }
             }
         }

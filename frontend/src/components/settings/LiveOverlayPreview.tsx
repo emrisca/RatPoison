@@ -213,7 +213,7 @@ export function LiveOverlayPreview() {
             >
               <span
                 className="rp-free-hud-mode"
-                style={{ backgroundColor: app.hudAccentColor, color: '#090d16' }}
+                style={{ backgroundColor: app.hudAccentColor, color: '#0a0a0a' }}
               >
                 FREE
               </span>
@@ -226,7 +226,7 @@ export function LiveOverlayPreview() {
                     className="rp-hud-kbd"
                     style={
                       k === 'I'
-                        ? { backgroundColor: app.hudAccentColor, color: '#090d16', borderColor: app.hudAccentColor }
+                        ? { backgroundColor: app.hudAccentColor, color: '#0a0a0a', borderColor: app.hudAccentColor }
                         : undefined
                     }
                   >

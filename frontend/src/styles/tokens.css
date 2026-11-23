@@ -1,72 +1,95 @@
+/* Amber Mono 2.0 — Geometric Industrial Monochrome + Amber Design System */
+/* Source palette: https://tweakcn.com/themes/cmf5pk1cx000104l83645de2s */
+
 :root,
 :root[data-theme='dark'] {
-  /* Surfaces */
-  --rp-bg-app: #0c0f15;
-  --rp-bg-sidebar: #11151e;
-  --rp-bg-surface: #161b26;
-  --rp-bg-elevated: #1e2534;
-  --rp-bg-hover: rgba(148, 163, 184, 0.1);
-  --rp-bg-input: #0e121a;
+  /* Core Amber Mono Surfaces (oklch 0.145 / 0.205 / 0.216 / 0.268) */
+  --rp-bg-app: #0a0a0a;
+  --rp-bg-sidebar: #171717;
+  --rp-bg-surface: #171717;
+  --rp-bg-elevated: #292524;
+  --rp-bg-muted: #1c1917;
+  --rp-bg-hover: rgba(225, 113, 0, 0.08);
+  --rp-bg-input: #141210;
 
-  /* Borders */
-  --rp-border-subtle: rgba(148, 163, 184, 0.14);
-  --rp-border-strong: rgba(148, 163, 184, 0.28);
+  /* Hairline Stone Borders (oklch 0.374 0.01 67.558) */
+  --rp-border-subtle: #2e2a27;
+  --rp-border-strong: #44403b;
 
-  /* Text */
-  --rp-text-primary: #f1f5f9;
-  --rp-text-secondary: #94a3b8;
-  --rp-text-muted: #64748b;
+  /* Foreground Typography (oklch 0.97 / 0.709 warm stone) */
+  --rp-text-primary: #f5f5f5;
+  --rp-text-secondary: #a6a09b;
+  --rp-text-muted: #78716c;
 
-  /* Accents & Semantic */
-  --rp-accent: #38bdf8;
-  --rp-accent-hover: #7dd3fc;
-  --rp-accent-soft: rgba(56, 189, 248, 0.14);
-  --rp-modified-dot: #f59e0b;
-  --rp-modified-soft: rgba(245, 158, 11, 0.16);
-  --rp-success: #22c55e;
-  --rp-danger: #f43f5e;
-  --rp-danger-soft: rgba(244, 63, 94, 0.15);
+  /* Primary Amber & Semantic Tokens (oklch 0.666 0.179 58.318) */
+  --rp-accent: #e17100;
+  --rp-accent-hover: #f58a1f;
+  --rp-accent-fg: #0a0a0a;
+  --rp-accent-ring: #973c00;
+  --rp-accent-soft: rgba(225, 113, 0, 0.14);
+  --rp-modified-dot: #f0b100;
+  --rp-modified-soft: rgba(240, 177, 0, 0.15);
+  --rp-success: #a65f00;
+  --rp-danger: #e7000b;
+  --rp-danger-soft: rgba(193, 0, 7, 0.18);
 
-  /* Typography */
-  --rp-font-sans: 'SF Pro Text', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --rp-font-mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+  /* Brand Icon Mark */
+  --rp-brand-bg: #141414;
+  --rp-brand-fg: #f4f3ee;
+  --rp-brand-border: #e17100;
 
-  /* Radii & Shadows */
-  --rp-radius-sm: 6px;
-  --rp-radius-md: 10px;
-  --rp-radius-lg: 14px;
-  --rp-shadow-menu: 0 14px 36px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(148, 163, 184, 0.2);
-  --rp-shadow-toast: 0 10px 26px rgba(0, 0, 0, 0.45);
+  /* Typography — Geist Mono industrial monospace stack */
+  --rp-font-sans: 'Geist Mono', 'JetBrains Mono', 'SF Mono', Menlo, Consolas, ui-monospace, monospace;
+  --rp-font-mono: 'Geist Mono', 'JetBrains Mono', 'SF Mono', Menlo, Consolas, ui-monospace, monospace;
+
+  /* Geometric 0px Radii & Zero-Shadow Flat Elevation */
+  --rp-radius-sm: 0px;
+  --rp-radius-md: 0px;
+  --rp-radius-lg: 0px;
+  --rp-shadow-menu: 0 0 0 1px #44403b;
+  --rp-shadow-toast: 0 0 0 1px #e17100;
 
   /* Motion */
   --rp-ease-snappy: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --rp-duration-fast: 110ms;
+  --rp-duration-fast: 90ms;
 }
 
 :root[data-theme='light'] {
-  --rp-bg-app: #f6f8fb;
-  --rp-bg-sidebar: #eef2f7;
+  /* Core Amber Mono Light Surfaces (oklch 0.985 / 0.97 / 0.923) */
+  --rp-bg-app: #fafafa;
+  --rp-bg-sidebar: #f5f5f5;
   --rp-bg-surface: #ffffff;
-  --rp-bg-elevated: #f8fafc;
-  --rp-bg-hover: rgba(15, 23, 42, 0.06);
+  --rp-bg-elevated: #f5f5f4;
+  --rp-bg-muted: #e7e5e4;
+  --rp-bg-hover: rgba(225, 113, 0, 0.08);
   --rp-bg-input: #ffffff;
 
-  --rp-border-subtle: rgba(15, 23, 42, 0.1);
-  --rp-border-strong: rgba(15, 23, 42, 0.22);
+  /* Hairline Warm Stone Borders (oklch 0.869 / 0.709) */
+  --rp-border-subtle: #d6d3d1;
+  --rp-border-strong: #a6a09b;
 
-  --rp-text-primary: #0f172a;
-  --rp-text-secondary: #475569;
-  --rp-text-muted: #64748b;
+  /* Foreground Typography (oklch 0.205 / 0.268 / 0.374) */
+  --rp-text-primary: #171717;
+  --rp-text-secondary: #44403b;
+  --rp-text-muted: #78716c;
 
-  --rp-accent: #0284c7;
-  --rp-accent-hover: #0369a1;
-  --rp-accent-soft: rgba(2, 132, 199, 0.12);
-  --rp-modified-dot: #d97706;
-  --rp-modified-soft: rgba(217, 119, 6, 0.14);
-  --rp-success: #16a34a;
-  --rp-danger: #e11d48;
-  --rp-danger-soft: rgba(225, 29, 72, 0.12);
+  /* Primary Amber & Semantic Tokens */
+  --rp-accent: #e17100;
+  --rp-accent-hover: #bb4d00;
+  --rp-accent-fg: #fafafa;
+  --rp-accent-ring: #e17100;
+  --rp-accent-soft: rgba(225, 113, 0, 0.12);
+  --rp-modified-dot: #bb4d00;
+  --rp-modified-soft: rgba(187, 77, 0, 0.12);
+  --rp-success: #a65f00;
+  --rp-danger: #e7000b;
+  --rp-danger-soft: rgba(231, 0, 11, 0.1);
 
-  --rp-shadow-menu: 0 12px 32px rgba(15, 23, 42, 0.16), 0 0 0 1px rgba(15, 23, 42, 0.12);
-  --rp-shadow-toast: 0 10px 24px rgba(15, 23, 42, 0.14);
+  /* Brand Icon Mark */
+  --rp-brand-bg: #171717;
+  --rp-brand-fg: #f4f3ee;
+  --rp-brand-border: #171717;
+
+  --rp-shadow-menu: 0 0 0 1px #a6a09b;
+  --rp-shadow-toast: 0 0 0 1px #e17100;
 }
