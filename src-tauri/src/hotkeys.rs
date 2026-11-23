@@ -152,6 +152,7 @@ pub struct HookRouteConfig {
     pub cycle_monitor: Option<KeyChord>,
     pub open_settings: Option<KeyChord>,
     pub grid_case_sensitive: bool,
+    pub subgrid_keys: String,
     pub free_up: KeyCode,
     pub free_down: KeyCode,
     pub free_left: KeyCode,
@@ -187,6 +188,14 @@ impl HookRouteConfig {
             .and_then(Value::as_bool)
             .unwrap_or(true);
 
+        let subgrid_keys = cfg
+            .get("grid")
+            .and_then(|v| v.get("subgridKeys"))
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("qweasdzxc")
+            .to_ascii_lowercase();
+
         Self {
             toggle_grid: kb("toggleGrid", "Option+Space"),
             toggle_label_mode: kb("toggleLabelMode", "Option+Shift+Space"),
@@ -199,6 +208,7 @@ impl HookRouteConfig {
             cycle_monitor: kb("cycleMonitor", "Tab"),
             open_settings: kb("openSettings", "Cmd+,"),
             grid_case_sensitive,
+            subgrid_keys,
             free_up: fm_key("keyUp", KeyCode::from_ascii_upper(b'I')),
             free_down: fm_key("keyDown", KeyCode::from_ascii_upper(b'K')),
             free_left: fm_key("keyLeft", KeyCode::from_ascii_upper(b'J')),
@@ -299,6 +309,27 @@ impl HookRouter {
         } else {
             None
         }
+    }
+
+    /// Maps the configured Free Mode directional keys (default `I/K/J/L`) to nudge directions
+    /// so Grid, Subgrid, and Nudge micro-adjusting stay aligned with Free Mode.
+    fn direction_for_nudge_key(&self, code: KeyCode) -> Option<Direction> {
+        if code == self.config.free_up {
+            Some(Direction::Up)
+        } else if code == self.config.free_down {
+            Some(Direction::Down)
+        } else if code == self.config.free_left {
+            Some(Direction::Left)
+        } else if code == self.config.free_right {
+            Some(Direction::Right)
+        } else {
+            None
+        }
+    }
+
+    fn is_subgrid_label_key(&self, code: KeyCode) -> bool {
+        code.to_ascii_char(false)
+            .is_some_and(|ch| self.config.subgrid_keys.contains(ch))
     }
 
     fn map_direction_to_free_key(dir: Direction, scroll: bool) -> FreeKey {
@@ -601,45 +632,68 @@ impl HookRouter {
                     return (InterceptDecision::Swallow, actions);
                 }
 
-                // In Nudge mode, support HJKL nudging and Drag toggle
-                if self.mode == EngineMode::Nudge {
-                    if self.config.hold_drag.is_some_and(|c| c.matches(&ev)) {
-                        self.swallowed_keys.insert(ev.code);
-                        if ev.phase == KeyPhase::Down {
-                            let next_action = if self.dragging {
-                                MouseActionKind::DragEnd
-                            } else {
-                                MouseActionKind::DragStart
-                            };
-                            self.dragging = !self.dragging;
-                            actions.push(HookAction::Engine(EngineEvent::MouseAction {
-                                action: next_action,
-                            }));
-                        }
-                        return (InterceptDecision::Swallow, actions);
-                    }
-
-                    let hjkl_dir = match ev.code {
-                        c if c == KeyCode::from_ascii_upper(b'H') => Some(Direction::Left),
-                        c if c == KeyCode::from_ascii_upper(b'J') => Some(Direction::Down),
-                        c if c == KeyCode::from_ascii_upper(b'K') => Some(Direction::Up),
-                        c if c == KeyCode::from_ascii_upper(b'L') => Some(Direction::Right),
-                        _ => None,
-                    };
-                    if let Some(dir) = hjkl_dir {
-                        let step = if ev.modifiers.contains(Modifiers::SHIFT) {
-                            NudgeStep::Coarse
-                        } else if ev.modifiers.contains(Modifiers::ALT) {
-                            NudgeStep::Fine
+                // In Nudge mode, support Drag toggle
+                if self.mode == EngineMode::Nudge
+                    && self.config.hold_drag.is_some_and(|c| c.matches(&ev))
+                {
+                    self.swallowed_keys.insert(ev.code);
+                    if ev.phase == KeyPhase::Down {
+                        let next_action = if self.dragging {
+                            MouseActionKind::DragEnd
                         } else {
-                            NudgeStep::Normal
+                            MouseActionKind::DragStart
                         };
-                        self.swallowed_keys.insert(ev.code);
-                        actions.push(HookAction::Engine(EngineEvent::Nudge {
-                            direction: dir,
-                            step,
+                        self.dragging = !self.dragging;
+                        actions.push(HookAction::Engine(EngineEvent::MouseAction {
+                            action: next_action,
                         }));
-                        return (InterceptDecision::Swallow, actions);
+                    }
+                    return (InterceptDecision::Swallow, actions);
+                }
+
+                // IJKL micro-adjusting aligned with Free Mode (`I` Up, `J` Left, `K` Down, `L` Right):
+                // - In Nudge mode: unmodified / Shift (coarse) / Alt (fine)
+                // - In Subgrid mode: unmodified / Shift / Alt whenever the key is not a subgrid label
+                //   (default subgrid keys are `qweasdzxc`, so `I/J/K/L` work directly without conflict),
+                //   or with Alt held even if customized
+                // - In Grid mode: Alt+I/J/K/L (fine) and Alt+Shift+I/J/K/L (coarse) so plain letters
+                //   remain available for typing 2-letter grid cell codes
+                if matches!(
+                    self.mode,
+                    EngineMode::Grid | EngineMode::Subgrid | EngineMode::Nudge
+                ) {
+                    let relevant_mods = mask_relevant_modifiers(ev.modifiers);
+                    let only_shift_alt = Modifiers::from_bits_truncate(
+                        relevant_mods.bits() & !(Modifiers::SHIFT.bits() | Modifiers::ALT.bits()),
+                    )
+                    .is_empty();
+                    if only_shift_alt {
+                        if let Some(dir) = self.direction_for_nudge_key(ev.code) {
+                            let allow_nudge = match self.mode {
+                                EngineMode::Nudge => true,
+                                EngineMode::Subgrid => {
+                                    relevant_mods.contains(Modifiers::ALT)
+                                        || !self.is_subgrid_label_key(ev.code)
+                                }
+                                EngineMode::Grid => relevant_mods.contains(Modifiers::ALT),
+                                _ => false,
+                            };
+                            if allow_nudge {
+                                let step = if relevant_mods.contains(Modifiers::SHIFT) {
+                                    NudgeStep::Coarse
+                                } else if relevant_mods.contains(Modifiers::ALT) {
+                                    NudgeStep::Fine
+                                } else {
+                                    NudgeStep::Normal
+                                };
+                                self.swallowed_keys.insert(ev.code);
+                                actions.push(HookAction::Engine(EngineEvent::Nudge {
+                                    direction: dir,
+                                    step,
+                                }));
+                                return (InterceptDecision::Swallow, actions);
+                            }
+                        }
                     }
                 }
 
@@ -807,5 +861,93 @@ mod tests {
         assert_eq!(dec, InterceptDecision::Swallow);
         assert!(!actions.is_empty());
         assert!(router.active_directions_strings().is_empty());
+    }
+
+    #[test]
+    fn ijkl_micro_adjust_works_in_nudge_subgrid_and_alt_grid_modes() {
+        let cfg = HookRouteConfig::from_config_json(&default_frontend_config_json_for_os("macos"));
+        let mut router = HookRouter::new(cfg);
+
+        // Nudge mode: I=Up, J=Left, K=Down, L=Right (with Shift=Coarse, Alt=Fine)
+        router.sync_engine_state(EngineMode::Nudge, false);
+        let cases = [
+            (b'I', Modifiers::EMPTY, Direction::Up, NudgeStep::Normal),
+            (b'J', Modifiers::SHIFT, Direction::Left, NudgeStep::Coarse),
+            (b'K', Modifiers::ALT, Direction::Down, NudgeStep::Fine),
+            (b'L', Modifiers::EMPTY, Direction::Right, NudgeStep::Normal),
+        ];
+        for (ch, mods, expected_dir, expected_step) in cases {
+            let (dec, actions) =
+                router.route_event(ev(KeyCode::from_ascii_upper(ch), mods, KeyPhase::Down));
+            assert_eq!(dec, InterceptDecision::Swallow);
+            assert!(matches!(
+                actions.as_slice(),
+                [HookAction::Engine(EngineEvent::Nudge { direction, step })]
+                    if *direction == expected_dir && *step == expected_step
+            ));
+        }
+
+        // Old H key must NOT nudge anymore in Nudge mode
+        let (_, actions) = router.route_event(ev(
+            KeyCode::from_ascii_upper(b'H'),
+            Modifiers::EMPTY,
+            KeyPhase::Down,
+        ));
+        assert!(!matches!(
+            actions.as_slice(),
+            [HookAction::Engine(EngineEvent::Nudge { .. })]
+        ));
+
+        // Subgrid mode: unmodified I/J/K/L nudge directly (not in default `qweasdzxc`),
+        // while `q` still routes as a subgrid cell KeyChar.
+        router.sync_engine_state(EngineMode::Subgrid, false);
+        let (dec, actions) = router.route_event(ev(
+            KeyCode::from_ascii_upper(b'I'),
+            Modifiers::EMPTY,
+            KeyPhase::Down,
+        ));
+        assert_eq!(dec, InterceptDecision::Swallow);
+        assert!(matches!(
+            actions.as_slice(),
+            [HookAction::Engine(EngineEvent::Nudge {
+                direction: Direction::Up,
+                step: NudgeStep::Normal
+            })]
+        ));
+        let (dec, actions) = router.route_event(ev(
+            KeyCode::from_ascii_upper(b'Q'),
+            Modifiers::EMPTY,
+            KeyPhase::Down,
+        ));
+        assert_eq!(dec, InterceptDecision::Swallow);
+        assert!(matches!(
+            actions.as_slice(),
+            [HookAction::Engine(EngineEvent::KeyChar { ch: 'q' })]
+        ));
+
+        // Grid mode: plain `I` still types cell char `'i'`, while `Alt+I` nudges Up (Fine)
+        router.sync_engine_state(EngineMode::Grid, false);
+        let (_, actions) = router.route_event(ev(
+            KeyCode::from_ascii_upper(b'I'),
+            Modifiers::EMPTY,
+            KeyPhase::Down,
+        ));
+        assert!(matches!(
+            actions.as_slice(),
+            [HookAction::Engine(EngineEvent::KeyChar { ch: 'i' })]
+        ));
+        let (dec, actions) = router.route_event(ev(
+            KeyCode::from_ascii_upper(b'I'),
+            Modifiers::ALT,
+            KeyPhase::Down,
+        ));
+        assert_eq!(dec, InterceptDecision::Swallow);
+        assert!(matches!(
+            actions.as_slice(),
+            [HookAction::Engine(EngineEvent::Nudge {
+                direction: Direction::Up,
+                step: NudgeStep::Fine
+            })]
+        ));
     }
 }

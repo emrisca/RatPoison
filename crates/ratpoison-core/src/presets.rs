@@ -286,11 +286,21 @@ pub struct WorkflowPreset {
     pub unknown_fields: BTreeMap<String, serde_json::Value>,
 }
 
+/// Canonical ID of the built-in unscoped standard preset.
+pub const STANDARD_PRESET_ID: &str = "standard";
+
 impl WorkflowPreset {
+    /// Returns `true` when this preset is the built-in unscoped `"standard"` preset,
+    /// meaning [`crate::CoreEngine`] should honor the live `RatPoisonConfig::{grid, nudge, free_mode}`
+    /// settings rather than the static default copies stored inside [`Self::standard_grid`].
+    pub fn is_unscoped_standard(&self) -> bool {
+        self.id == STANDARD_PRESET_ID && self.scope.is_unscoped()
+    }
+
     /// Default full-precision Grid -> Subgrid -> Nudge preset.
     pub fn standard_grid() -> Self {
         Self {
-            id: "standard".to_string(),
+            id: STANDARD_PRESET_ID.to_string(),
             name: "Standard Grid".to_string(),
             description: "16x12 two-key grid with 3x3 subgrid and precision nudge".to_string(),
             grid: GridConfig::default(),

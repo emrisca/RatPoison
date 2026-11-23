@@ -38,7 +38,7 @@ pub use grid::{
 };
 pub use presets::{
     default_presets, resolve_preset, FreeModeProfile, MouseButton, PresetOverrideScope,
-    QuickSelectAction, SpeedModifier, SpeedTier, WorkflowPreset,
+    QuickSelectAction, SpeedModifier, SpeedTier, WorkflowPreset, STANDARD_PRESET_ID,
 };
 pub use state_machine::{
     ActiveModifiers, CoreEngine, EngineEffect, EngineEvent, EngineMode, FreeKey, LabelBadge,

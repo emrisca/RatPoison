@@ -6,7 +6,7 @@ type PreviewTab = 'grid' | 'label' | 'hud';
 
 /**
  * Interactive real-time Appearance mini-preview rendering miniature Grid Mode
- * (with prefix highlight + Subgrid zoom inset), Label Mode badges, and Free Mode HUD.
+ * (with prefix highlight + 1:1 or magnified Subgrid), Label Mode badges, and Free Mode HUD.
  */
 export function LiveOverlayPreview() {
   const config = useSettingsStore((s) => s.config);
@@ -49,7 +49,7 @@ export function LiveOverlayPreview() {
             <span className="rp-mock-dot rp-mock-dot--r" />
             <span className="rp-mock-dot rp-mock-dot--y" />
             <span className="rp-mock-dot rp-mock-dot--g" />
-            <span className="rp-mock-url">mouseless-workspace — RatPoison</span>
+            <span className="rp-mock-url">workspace — RatPoison</span>
           </div>
           <div className="rp-mock-body">
             <div className="rp-mock-sidebar">
@@ -98,11 +98,11 @@ export function LiveOverlayPreview() {
                       key={code}
                       className="rp-preview-grid-cell"
                       style={{
-                        borderColor: hexToRgba(app.gridLineColor, 0.42),
+                        borderColor: hexToRgba(app.gridLineColor, 0.22),
                         borderWidth: `${Math.min(2, app.gridLineWidth)}px`,
                         backgroundColor:
                           samplePrefix && matches
-                            ? hexToRgba(app.gridAccentColor, 0.14)
+                            ? hexToRgba(app.gridAccentColor, 0.12)
                             : 'transparent',
                         opacity: cellOpacity,
                         fontFamily: app.gridFontFamily,
@@ -112,10 +112,17 @@ export function LiveOverlayPreview() {
                     >
                       {isSubgridDemo ? (
                         <div
-                          className="rp-preview-subgrid-inset"
+                          className={`rp-preview-subgrid-inset${
+                            gridCfg.enableSubgridZoom ? ' rp-preview-subgrid-inset--zoomed' : ''
+                          }`}
                           style={{
                             borderColor: app.subgridAccentColor,
-                            backgroundColor: hexToRgba(app.subgridBgColor, app.subgridBgOpacity),
+                            backgroundColor: hexToRgba(
+                              app.subgridBgColor,
+                              gridCfg.enableSubgridZoom
+                                ? Math.max(app.subgridBgOpacity, 0.8)
+                                : Math.min(app.subgridBgOpacity, 0.42),
+                            ),
                           }}
                         >
                           {['q', 'w', 'e', 'a', 's', 'd', 'z', 'x', 'c'].map((sc) => (
@@ -124,7 +131,7 @@ export function LiveOverlayPreview() {
                               className="rp-preview-subcell"
                               style={{
                                 color: sc === 's' ? app.subgridAccentColor : app.gridTextColor,
-                                borderColor: hexToRgba(app.subgridAccentColor, 0.35),
+                                borderColor: hexToRgba(app.gridLineColor, 0.28),
                               }}
                             >
                               {sc}
@@ -180,7 +187,7 @@ export function LiveOverlayPreview() {
                     borderRadius: `${app.labelBorderRadius}px`,
                   }}
                 >
-                  <span style={{ fontWeight: 700 }}>
+                  <span style={{ fontWeight: 600 }}>
                     {showPrefix ? (
                       <>
                         <span style={{ color: app.labelMatchPrefixColor }}>{item.code[0]}</span>
@@ -208,12 +215,12 @@ export function LiveOverlayPreview() {
                 position: 'relative',
                 backgroundColor: hexToRgba(app.hudBgColor, app.hudOpacity),
                 color: app.hudTextColor,
-                borderColor: hexToRgba(app.hudAccentColor, 0.5),
+                borderColor: hexToRgba(app.hudAccentColor, 0.36),
               }}
             >
               <span
                 className="rp-free-hud-mode"
-                style={{ backgroundColor: app.hudAccentColor, color: '#0a0a0a' }}
+                style={{ backgroundColor: app.hudAccentColor, color: '#FFFFFF' }}
               >
                 FREE
               </span>
@@ -226,7 +233,7 @@ export function LiveOverlayPreview() {
                     className="rp-hud-kbd"
                     style={
                       k === 'I'
-                        ? { backgroundColor: app.hudAccentColor, color: '#0a0a0a', borderColor: app.hudAccentColor }
+                        ? { backgroundColor: app.hudAccentColor, color: '#FFFFFF', borderColor: app.hudAccentColor }
                         : undefined
                     }
                   >

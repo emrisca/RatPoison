@@ -215,7 +215,7 @@ pub fn request_accessibility_and_input_monitoring() -> bool {
     // SAFETY: Builds a single-entry CoreFoundation dictionary `{ kAXTrustedCheckOptionPrompt: true }`
     // and releases it via `CfOwned`.
     let trusted = unsafe {
-        let keys = [kAXTrustedCheckOptionPrompt as *const c_void];
+        let keys = [kAXTrustedCheckOptionPrompt];
         let vals = [kCFBooleanTrue];
         let dict_raw = CFDictionaryCreate(
             ptr::null(),

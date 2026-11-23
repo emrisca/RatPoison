@@ -60,13 +60,13 @@ export function FreeModeHud() {
         ...followStyle,
         backgroundColor: hexToRgba(app.hudBgColor, app.hudOpacity),
         color: app.hudTextColor,
-        borderColor: hexToRgba(app.hudAccentColor, 0.45),
+        borderColor: hexToRgba(app.hudAccentColor, 0.36),
       }}
       aria-hidden="true"
     >
       <span
         className="rp-free-hud-mode"
-        style={{ backgroundColor: app.hudAccentColor, color: '#0a0a0a' }}
+        style={{ backgroundColor: app.hudAccentColor, color: '#FFFFFF' }}
       >
         {modeBadge}
       </span>
@@ -83,7 +83,7 @@ export function FreeModeHud() {
               className="rp-hud-kbd"
               style={
                 active
-                  ? { backgroundColor: app.hudAccentColor, color: '#0a0a0a', borderColor: app.hudAccentColor }
+                  ? { backgroundColor: app.hudAccentColor, color: '#FFFFFF', borderColor: app.hudAccentColor }
                   : undefined
               }
             >

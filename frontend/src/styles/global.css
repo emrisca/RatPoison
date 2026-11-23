@@ -12,6 +12,8 @@ body,
   width: 100%;
   height: 100%;
   font-family: var(--rp-font-sans);
+  line-height: 1.5;
+  font-optical-sizing: auto;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -36,7 +38,8 @@ html[data-view='settings'] #root {
 }
 
 code,
-pre {
+pre,
+kbd {
   font-family: var(--rp-font-mono);
 }
 
@@ -58,5 +61,25 @@ textarea {
 }
 
 .rp-spin {
-  animation: rp-spin 0.9s linear infinite;
+  animation: rp-spin 0.75s linear infinite;
+}
+
+/* Accessibility: Reduced motion & reduced transparency */
+@media (prefers-reduced-motion: reduce) {
+  .rp-spin {
+    animation-duration: 1.6s;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root,
+  :root[data-theme='dark'] {
+    --rp-bg-sidebar: #18181b;
+    --rp-bg-glass: #1c1c1e;
+  }
+
+  :root[data-theme='light'] {
+    --rp-bg-sidebar: #ececef;
+    --rp-bg-glass: #ffffff;
+  }
 }

@@ -426,8 +426,7 @@ pub fn project_snapshot_to_overlay_payload(
             .subgrid_cells
             .iter()
             .map(|cell| {
-                let (matched_prefix, exact_match) =
-                    matches_prefix(&cell.label, prefix, case_sensitive);
+                let (matched_prefix, exact_match) = matches_prefix(&cell.label, prefix, false);
                 GridCellDto {
                     code: cell.label.clone(),
                     row: cell.row,
@@ -438,6 +437,17 @@ pub fn project_snapshot_to_overlay_payload(
                 }
             })
             .collect();
+
+        let actual_sub_rows = cells
+            .iter()
+            .map(|c| c.row + 1)
+            .max()
+            .unwrap_or(config.grid.subgrid_rows);
+        let actual_sub_cols = cells
+            .iter()
+            .map(|c| c.col + 1)
+            .max()
+            .unwrap_or(config.grid.subgrid_cols);
 
         let crosshair = snapshot
             .cursor_preview
@@ -450,8 +460,8 @@ pub fn project_snapshot_to_overlay_payload(
         SubgridStateDto {
             parent_code: prefix.to_string(),
             parent_rect: to_window_relative_rect(parent_rect, origin),
-            rows: config.grid.subgrid_rows,
-            cols: config.grid.subgrid_cols,
+            rows: actual_sub_rows,
+            cols: actual_sub_cols,
             cells,
             nudge_step_px: config.nudge.normal_px,
             crosshair,
@@ -522,13 +532,24 @@ pub fn project_snapshot_to_overlay_payload(
         None
     };
 
+    let actual_grid_rows = grid_cells
+        .iter()
+        .map(|c| c.row + 1)
+        .max()
+        .unwrap_or(config.grid.rows);
+    let actual_grid_cols = grid_cells
+        .iter()
+        .map(|c| c.col + 1)
+        .max()
+        .unwrap_or(config.grid.cols);
+
     OverlayStatePayloadDto {
         mode: mode_str.to_string(),
         visible: snapshot.visible,
         active_monitor: MonitorDto::from(active),
         typed_prefix: snapshot.typed_prefix.clone(),
-        grid_rows: config.grid.rows,
-        grid_cols: config.grid.cols,
+        grid_rows: actual_grid_rows,
+        grid_cols: actual_grid_cols,
         grid_cells,
         subgrid,
         label_badges,
@@ -560,7 +581,7 @@ pub fn default_frontend_config_json_for_os(os: &str) -> Value {
             "cols": 26,
             "alphabet": "asdfghjklqwertyuiopzxcvbnmASDFGHJKLQWERTYUIOPZXCVBNM",
             "caseSensitive": true,
-            "enableSubgridZoom": true,
+            "enableSubgridZoom": false,
             "subgridRows": 3,
             "subgridCols": 3,
             "subgridZoomScale": 1.85,
@@ -591,7 +612,7 @@ pub fn default_frontend_config_json_for_os(os: &str) -> Value {
         "labelMode": {
             "enabled": true,
             "charset": "asdfghjklqweruiopzxcvbnm",
-            "minElementSizePx": 14,
+            "minElementSizePx": 10,
             "maxBadges": 160,
             "collisionAvoidance": true,
             "includeMenubar": true,
@@ -601,32 +622,32 @@ pub fn default_frontend_config_json_for_os(os: &str) -> Value {
         },
         "keybindings": kb,
         "appearance": {
-            "theme": "dark",
-            "gridBgColor": "#0a0a0a",
-            "gridBgOpacity": 0.46,
-            "gridLineColor": "#44403b",
+            "theme": "system",
+            "gridBgColor": "#0C0D10",
+            "gridBgOpacity": 0.24,
+            "gridLineColor": "#FFFFFF",
             "gridLineWidth": 1,
-            "gridTextColor": "#f5f5f5",
-            "gridAccentColor": "#e17100",
-            "gridFontFamily": "\"Geist Mono\", \"JetBrains Mono\", \"SF Mono\", Menlo, Consolas, monospace",
-            "gridFontSize": 13,
+            "gridTextColor": "#F5F5F7",
+            "gridAccentColor": "#0A84FF",
+            "gridFontFamily": "ui-monospace, \"SF Mono\", Menlo, Consolas, monospace",
+            "gridFontSize": 12,
             "gridFontWeight": 600,
-            "subgridAccentColor": "#e17100",
-            "subgridBgColor": "#171717",
-            "subgridBgOpacity": 0.9,
-            "crosshairColor": "#f0b100",
-            "labelBgColor": "#e17100",
-            "labelBgOpacity": 0.96,
-            "labelBorderColor": "#973c00",
-            "labelTextColor": "#0a0a0a",
-            "labelMatchPrefixColor": "#fafafa",
-            "labelFontFamily": "\"Geist Mono\", \"JetBrains Mono\", \"SF Mono\", Menlo, Consolas, monospace",
+            "subgridAccentColor": "#0A84FF",
+            "subgridBgColor": "#1C1C1E",
+            "subgridBgOpacity": 0.36,
+            "crosshairColor": "#64D2FF",
+            "labelBgColor": "#1C1C1E",
+            "labelBgOpacity": 0.92,
+            "labelBorderColor": "#0A84FF",
+            "labelTextColor": "#F5F5F7",
+            "labelMatchPrefixColor": "#64D2FF",
+            "labelFontFamily": "ui-monospace, \"SF Mono\", Menlo, Consolas, monospace",
             "labelFontSize": 12,
-            "labelBorderRadius": 0,
-            "hudBgColor": "#171717",
-            "hudTextColor": "#f5f5f5",
-            "hudAccentColor": "#e17100",
-            "hudOpacity": 0.94,
+            "labelBorderRadius": 6,
+            "hudBgColor": "#1C1C1E",
+            "hudTextColor": "#F5F5F7",
+            "hudAccentColor": "#0A84FF",
+            "hudOpacity": 0.88,
             "reduceMotion": false
         },
         "updates": {
@@ -742,20 +763,39 @@ impl ConfigStore {
                     );
                 }
 
-                // Upgrade untouched legacy cyan/slate overlay appearance to Amber Mono 2.0
-                if get_json_path(&merged, "appearance.gridBgColor").and_then(Value::as_str)
+                // Upgrade untouched legacy cyan/slate or Amber Mono 2.0 themes to the new neutral Apple theme
+                let is_legacy_cyan = get_json_path(&merged, "appearance.gridBgColor")
+                    .and_then(Value::as_str)
                     == Some("#0b0e14")
                     && get_json_path(&merged, "appearance.subgridAccentColor")
                         .and_then(Value::as_str)
                         == Some("#38bdf8")
                     && get_json_path(&merged, "appearance.hudAccentColor")
                         .and_then(Value::as_str)
-                        == Some("#38bdf8")
-                {
+                        == Some("#38bdf8");
+                let is_legacy_amber = get_json_path(&merged, "appearance.gridBgColor")
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| s.eq_ignore_ascii_case("#0a0a0a"))
+                    && get_json_path(&merged, "appearance.gridAccentColor")
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| s.eq_ignore_ascii_case("#e17100"))
+                    && get_json_path(&merged, "appearance.hudAccentColor")
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| s.eq_ignore_ascii_case("#e17100"));
+
+                if is_legacy_cyan || is_legacy_amber {
                     let fresh_defaults = default_frontend_config_json();
                     if let Some(fresh_app) = fresh_defaults.get("appearance").cloned() {
                         set_json_path(&mut merged, "appearance", fresh_app);
                     }
+                    // Also disable legacy zoomed subgrid distortion so subgrid clicks land 1:1
+                    if get_json_path(&merged, "grid.enableSubgridZoom").and_then(Value::as_bool)
+                        == Some(true)
+                        && get_json_path(&merged, "grid.subgridZoomScale").and_then(Value::as_f64)
+                            == Some(1.85)
+                    {
+                        set_json_path(&mut merged, "grid.enableSubgridZoom", Value::Bool(false));
+                        }
                 }
             }
         }
@@ -783,6 +823,13 @@ impl ConfigStore {
             .filter(|s| !s.is_empty())
             .unwrap_or("asdfghjklqwertyuiopzxcvbnm")
             .to_string()
+    }
+
+    pub fn label_min_element_size_px(&self) -> f64 {
+        get_json_path(&self.raw_json, "labelMode.minElementSizePx")
+            .and_then(Value::as_f64)
+            .unwrap_or(10.0)
+            .clamp(4.0, 24.0)
     }
 
     pub fn update_channel(&self) -> String {
@@ -906,6 +953,15 @@ impl ConfigStore {
             get_json_path(&self.raw_json, "labelMode.maxBadges").and_then(Value::as_u64)
         {
             core.label_mode.max_badges = max_b as usize;
+        }
+        // Keep the built-in `"standard"` preset in lockstep with live user settings so
+        // `CoreEngine::activate_grid` never falls back to stale preset dimensions.
+        for preset in &mut core.presets {
+            if preset.id == "standard" {
+                preset.grid = core.grid.clone();
+                preset.nudge = core.nudge.clone();
+                preset.free_mode = core.free_mode.clone();
+            }
         }
         core
     }

@@ -4,6 +4,7 @@ use crate::{
     A11yError, AccessibilityBudget, AccessibilityProvider, AccessibilitySnapshot,
     AccessibleElement, ElementRole, LogicalRect,
 };
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 /// A node in a synthetic hierarchical accessibility tree used to test depth/node/time budget limits.
@@ -218,15 +219,11 @@ impl AccessibilityProvider for MockAccessibilityProvider {
         let mut max_depth_reached = 0usize;
         let mut truncated_by_budget = false;
 
-        // Iterative DFS stack: (node_ref, depth)
-        let mut stack: Vec<(&MockTreeNode, usize)> = self
-            .roots
-            .iter()
-            .rev()
-            .map(|node| (node, 1usize))
-            .collect();
+        // Iterative BFS queue: (node_ref, depth)
+        let mut queue: VecDeque<(&MockTreeNode, usize)> =
+            self.roots.iter().map(|node| (node, 1usize)).collect();
 
-        while let Some((node, depth)) = stack.pop() {
+        while let Some((node, depth)) = queue.pop_front() {
             if nodes_visited >= budget.max_nodes || start.elapsed() >= budget.timeout {
                 truncated_by_budget = true;
                 break;
@@ -248,8 +245,8 @@ impl AccessibilityProvider for MockAccessibilityProvider {
             elements.push(node.element.clone());
 
             if depth < budget.max_depth {
-                for child in node.children.iter().rev() {
-                    stack.push((child, depth + 1));
+                for child in &node.children {
+                    queue.push_back((child, depth + 1));
                 }
             } else if !node.children.is_empty() {
                 truncated_by_budget = true;

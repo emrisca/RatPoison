@@ -467,7 +467,22 @@ pub fn generate_subgrid(
     generate_subgrid_in_rect(parent_cell.rect, monitor_id, config)
 }
 
+fn deduplicate_case_insensitive(keys: &[char]) -> Vec<char> {
+    let mut seen = HashSet::with_capacity(keys.len());
+    let mut out = Vec::with_capacity(keys.len());
+    for &ch in keys {
+        let norm = normalize_char(ch, false);
+        if seen.insert(norm) {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 /// Generate a nested subgrid inside any `LogicalRect`.
+///
+/// Subgrid labels are always matched case-insensitively (`case_sensitive: false`), even when
+/// the primary grid uses a case-sensitive alphabet.
 pub fn generate_subgrid_in_rect(
     bounds: LogicalRect,
     monitor_id: impl Into<String>,
@@ -495,20 +510,36 @@ pub fn generate_subgrid_in_rect(
     }
 
     let total = (cols as usize) * (rows as usize);
-    let case_sensitive = config.label_scheme.case_sensitive;
+    // Subgrid keys (e.g. q/w/e, a/s/d, z/x/c) are always case-insensitive regardless of
+    // whether the primary grid uses a case-sensitive alphabet.
+    let case_sensitive = false;
 
     let labels = if !config.subgrid_keys.is_empty() && config.subgrid_keys.len() >= total {
-        validate_key_slice(&config.subgrid_keys, case_sensitive, "subgrid_keys")?;
+        validate_key_slice(&config.subgrid_keys[..total], case_sensitive, "subgrid_keys")?;
         config
             .subgrid_keys
             .iter()
             .take(total)
             .map(|c| c.to_string())
             .collect()
-    } else if config.label_scheme.capacity(1) >= total {
-        config.label_scheme.generate_labels(cols, rows, 1)?
     } else {
-        config.label_scheme.generate_labels(cols, rows, 2)?
+        let ci_scheme = LabelScheme {
+            alphabet: deduplicate_case_insensitive(&config.label_scheme.alphabet),
+            second_alphabet: config
+                .label_scheme
+                .second_alphabet
+                .as_deref()
+                .map(deduplicate_case_insensitive),
+            case_sensitive: false,
+            key_rows: None,
+            ordering: config.label_scheme.ordering,
+            unknown_fields: BTreeMap::new(),
+        };
+        if ci_scheme.capacity(1) >= total {
+            ci_scheme.generate_labels(cols, rows, 1)?
+        } else {
+            ci_scheme.generate_labels(cols, rows, 2)?
+        }
     };
 
     let cells = tile_rect_with_labels(bounds, cols, rows, labels);
@@ -881,5 +912,89 @@ mod tests {
         );
         assert_eq!(mid2, "LEFT");
         assert_eq!(pt2, LogicalPoint::new(-40.0, 100.0));
+    }
+
+    #[test]
+    fn subgrid_is_always_case_insensitive_even_when_primary_grid_is_case_sensitive() {
+        let mon = test_monitor();
+        let alphabet: Vec<char> = "asdfghjklqwertyuiopzxcvbnmASDFGHJKLQWERTYUIOPZXCVBNM"
+            .chars()
+            .collect();
+        let cfg = GridConfig {
+            cols: 26,
+            rows: 18,
+            label_length: 2,
+            label_scheme: LabelScheme {
+                alphabet,
+                second_alphabet: None,
+                case_sensitive: true,
+                key_rows: None,
+                ordering: LabelOrdering::RowColIndexed,
+                unknown_fields: BTreeMap::new(),
+            },
+            subgrid_cols: 3,
+            subgrid_rows: 3,
+            subgrid_keys: default_subgrid_keys(),
+            unknown_fields: BTreeMap::new(),
+        };
+
+        let primary = generate_grid(&mon, &cfg).unwrap();
+        assert_eq!(primary.cols, 26);
+        assert_eq!(primary.rows, 18);
+        assert_eq!(primary.cells.len(), 18 * 26);
+        assert!(primary.case_sensitive);
+
+        let parent = &primary.cells[7 * 26 + 13];
+        let sub = generate_subgrid(parent, &mon.id, &cfg).unwrap();
+        assert!(!sub.case_sensitive);
+        assert_eq!(sub.cols, 3);
+        assert_eq!(sub.rows, 3);
+        assert_eq!(sub.cells.len(), 9);
+
+        // Verify zero-gap tiling strictly covering parent.rect
+        assert!((sub.cells[0].rect.x - parent.rect.x).abs() < 1e-12);
+        assert!((sub.cells[0].rect.y - parent.rect.y).abs() < 1e-12);
+        let last = sub.cells.last().unwrap();
+        assert!((last.rect.right() - parent.rect.right()).abs() < 1e-12);
+        assert!((last.rect.bottom() - parent.rect.bottom()).abs() < 1e-12);
+
+        for cell in &sub.cells {
+            assert!(parent.rect.contains_point_inclusive(cell.center));
+            let upper = cell.label.to_ascii_uppercase();
+            assert!(matches!(sub.match_prefix(&cell.label), PrefixMatch::Exact(c) if c == cell));
+            assert!(matches!(sub.match_prefix(&upper), PrefixMatch::Exact(c) if c == cell));
+        }
+    }
+
+    #[test]
+    fn subgrid_fallback_with_case_sensitive_primary_scheme_has_no_ci_collisions() {
+        let mon = test_monitor();
+        let cfg = GridConfig {
+            cols: 26,
+            rows: 18,
+            label_length: 2,
+            label_scheme: LabelScheme::mixed_case_az(),
+            subgrid_cols: 6,
+            subgrid_rows: 5, // 30 cells > 26 case-insensitive letters -> 2-char CI labels
+            subgrid_keys: vec![],
+            unknown_fields: BTreeMap::new(),
+        };
+        let primary = generate_grid(&mon, &cfg).unwrap();
+        let sub = generate_subgrid(&primary.cells[0], &mon.id, &cfg).unwrap();
+        assert!(!sub.case_sensitive);
+        assert_eq!(sub.cells.len(), 30);
+
+        let unique_ci: HashSet<String> = sub
+            .cells
+            .iter()
+            .map(|c| c.label.to_ascii_lowercase())
+            .collect();
+        assert_eq!(unique_ci.len(), 30);
+
+        // Every generated label matches in both lowercase and uppercase
+        for cell in &sub.cells {
+            let upper = cell.label.to_ascii_uppercase();
+            assert!(matches!(sub.match_prefix(&upper), PrefixMatch::Exact(c) if c == cell));
+        }
     }
 }

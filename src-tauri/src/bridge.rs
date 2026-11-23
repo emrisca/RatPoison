@@ -148,7 +148,27 @@ impl AppRuntime {
 
         let step = self.engine.handle_event(event);
 
-        for effect in step.effects {
+        // If both `ShowOverlay` and `QueryAccessibility` are emitted in the same step
+        // (e.g. entering Label Mode), run `QueryAccessibility` BEFORE showing the overlay
+        // so `overlay.show()` never perturbs frontmost app focus before snapshotting the AX tree.
+        let mut ordered_effects = step.effects;
+        let has_query_a11y = ordered_effects
+            .iter()
+            .any(|e| matches!(e, EngineEffect::QueryAccessibility { .. }));
+        if has_query_a11y {
+            let mut deferred_show = Vec::new();
+            ordered_effects.retain(|e| {
+                if matches!(e, EngineEffect::ShowOverlay { .. }) {
+                    deferred_show.push(e.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            ordered_effects.extend(deferred_show);
+        }
+
+        for effect in ordered_effects {
             match effect {
                 EngineEffect::MoveCursor {
                     logical,
@@ -237,45 +257,57 @@ impl AppRuntime {
                         .cloned();
                     if let Some(mon) = active_mon {
                         let a11y_budget = AccessibilityBudget {
-                            max_depth: 24,
-                            max_nodes: 2000,
-                            timeout: std::time::Duration::from_millis(200),
+                            max_depth: 28,
+                            max_nodes: 3000,
+                            timeout: std::time::Duration::from_millis(500),
                         };
-                        if let Ok(a11y_snap) = self.a11y_provider.snapshot(&a11y_budget) {
-                            let cfg = LabelConfig {
-                                viewport: A11yRect::new(
-                                    mon.logical_rect.x,
-                                    mon.logical_rect.y,
-                                    mon.logical_rect.width,
-                                    mon.logical_rect.height,
-                                ),
-                                hint_alphabet: self.config_store.label_charset(),
-                                max_badges: self.engine.config().label_mode.max_badges,
-                                ..LabelConfig::default()
-                            };
-                            let generated = generate_label_badges(&a11y_snap.elements, &cfg);
-                            let core_badges: Vec<CoreLabelBadge> = generated
-                                .into_iter()
-                                .map(|b| CoreLabelBadge {
-                                    id: b.element.id,
-                                    label: b.hint,
-                                    title: b.element.title.unwrap_or_default(),
-                                    role: format!("{:?}", b.element.role),
-                                    rect: LogicalRect::new(
-                                        b.bounds.x,
-                                        b.bounds.y,
-                                        b.bounds.width,
-                                        b.bounds.height,
+                        match self.a11y_provider.snapshot(&a11y_budget) {
+                            Ok(a11y_snap) => {
+                                let cfg = LabelConfig {
+                                    viewport: A11yRect::new(
+                                        mon.logical_rect.x,
+                                        mon.logical_rect.y,
+                                        mon.logical_rect.width,
+                                        mon.logical_rect.height,
                                     ),
-                                    center: LogicalPoint::new(b.target.x, b.target.y),
-                                    monitor_id: mon.id.clone(),
-                                })
-                                .collect();
-                            let _ = self.engine.handle_event(
-                                EngineEvent::AccessibilityLabelsLoaded {
-                                    badges: core_badges,
-                                },
-                            );
+                                    hint_alphabet: self.config_store.label_charset(),
+                                    max_badges: self.engine.config().label_mode.max_badges,
+                                    min_dimension: self.config_store.label_min_element_size_px(),
+                                    ..LabelConfig::default()
+                                };
+                                let generated = generate_label_badges(&a11y_snap.elements, &cfg);
+                                let core_badges: Vec<CoreLabelBadge> = generated
+                                    .into_iter()
+                                    .map(|b| CoreLabelBadge {
+                                        id: b.element.id,
+                                        label: b.hint,
+                                        title: b.element.title.unwrap_or_default(),
+                                        role: format!("{:?}", b.element.role),
+                                        rect: LogicalRect::new(
+                                            b.bounds.x,
+                                            b.bounds.y,
+                                            b.bounds.width,
+                                            b.bounds.height,
+                                        ),
+                                        center: LogicalPoint::new(b.target.x, b.target.y),
+                                        monitor_id: mon.id.clone(),
+                                    })
+                                    .collect();
+                                let _ = self.engine.handle_event(
+                                    EngineEvent::AccessibilityLabelsLoaded {
+                                        badges: core_badges,
+                                    },
+                                );
+                            }
+                            Err(err) => {
+                                eprintln!(
+                                    "[RatPoison] Accessibility snapshot failed on {}: {err}",
+                                    self.a11y_provider.platform_name()
+                                );
+                                let _ = self.engine.handle_event(
+                                    EngineEvent::AccessibilityLabelsLoaded { badges: Vec::new() },
+                                );
+                            }
                         }
                     }
                 }

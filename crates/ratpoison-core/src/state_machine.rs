@@ -161,6 +161,42 @@ pub struct OverlaySnapshot {
     pub active_preset_id: Option<String>,
 }
 
+impl OverlaySnapshot {
+    /// Actual `(rows, cols)` represented by `grid_cells`, or `(0, 0)` when empty.
+    pub fn grid_dimensions(&self) -> (u16, u16) {
+        let rows = self
+            .grid_cells
+            .iter()
+            .map(|c| c.row.saturating_add(1))
+            .max()
+            .unwrap_or(0);
+        let cols = self
+            .grid_cells
+            .iter()
+            .map(|c| c.col.saturating_add(1))
+            .max()
+            .unwrap_or(0);
+        (rows, cols)
+    }
+
+    /// Actual `(rows, cols)` represented by `subgrid_cells`, or `(0, 0)` when empty.
+    pub fn subgrid_dimensions(&self) -> (u16, u16) {
+        let rows = self
+            .subgrid_cells
+            .iter()
+            .map(|c| c.row.saturating_add(1))
+            .max()
+            .unwrap_or(0);
+        let cols = self
+            .subgrid_cells
+            .iter()
+            .map(|c| c.col.saturating_add(1))
+            .max()
+            .unwrap_or(0);
+        (rows, cols)
+    }
+}
+
 /// Explicit OS/UI side-effect descriptors emitted by [`CoreEngine::handle_event`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -344,6 +380,7 @@ pub struct CoreEngine {
     active_monitor_id: Option<String>,
     active_app_id: Option<String>,
     active_preset: Option<WorkflowPreset>,
+    explicit_preset_id: Option<String>,
     primary_grid: Option<Grid>,
     subgrid: Option<Grid>,
     label_badges: Vec<LabelBadge>,
@@ -370,6 +407,7 @@ impl CoreEngine {
             active_monitor_id,
             active_app_id: None,
             active_preset: None,
+            explicit_preset_id: None,
             primary_grid: None,
             subgrid: None,
             label_badges: Vec::new(),
@@ -545,13 +583,39 @@ impl CoreEngine {
                     }
                 }
                 if matches!(self.mode, EngineMode::Grid | EngineMode::Subgrid) {
-                    let preset_id = self.active_preset.as_ref().map(|p| p.id.clone());
+                    let preset_id = self.explicit_preset_id.clone();
                     let target_mon = self.active_monitor_id.clone();
                     self.activate_grid(target_mon.as_deref(), preset_id.as_deref(), &mut effects);
                 }
             }
             EngineEvent::ConfigUpdated { config } => {
                 self.config = *config;
+                if self.mode != EngineMode::Normal {
+                    let monitor = self.current_monitor().cloned();
+                    self.active_preset = resolve_preset(
+                        &self.config.presets,
+                        self.explicit_preset_id.as_deref(),
+                        &self.config.active_preset_id,
+                        self.active_app_id.as_deref(),
+                        monitor.as_ref(),
+                    )
+                    .cloned();
+                    if self.mode == EngineMode::Grid {
+                        if let Some(mon) = monitor {
+                            let grid_cfg = self.effective_grid_config().clone();
+                            if let Ok(grid) = generate_grid(&mon, &grid_cfg)
+                                .or_else(|_| generate_grid(&mon, &self.config.grid))
+                                .or_else(|_| generate_grid(&mon, &crate::grid::GridConfig::default()))
+                            {
+                                let changed = self.primary_grid.as_ref() != Some(&grid);
+                                self.primary_grid = Some(grid);
+                                if changed {
+                                    self.typed_prefix.clear();
+                                }
+                            }
+                        }
+                    }
+                }
             }
             EngineEvent::ActiveContextChanged { app_id, monitor_id } => {
                 self.active_app_id = app_id;
@@ -578,23 +642,26 @@ impl CoreEngine {
             .or_else(|| self.layout.primary())
     }
 
-    fn effective_free_profile(&self) -> &FreeModeProfile {
+    fn active_override_preset(&self) -> Option<&WorkflowPreset> {
         self.active_preset
             .as_ref()
+            .filter(|p| !p.is_unscoped_standard())
+    }
+
+    fn effective_free_profile(&self) -> &FreeModeProfile {
+        self.active_override_preset()
             .map(|p| &p.free_mode)
             .unwrap_or(&self.config.free_mode)
     }
 
     fn effective_grid_config(&self) -> &crate::grid::GridConfig {
-        self.active_preset
-            .as_ref()
+        self.active_override_preset()
             .map(|p| &p.grid)
             .unwrap_or(&self.config.grid)
     }
 
     fn effective_nudge_config(&self) -> &crate::grid::NudgeConfig {
-        self.active_preset
-            .as_ref()
+        self.active_override_preset()
             .map(|p| &p.nudge)
             .unwrap_or(&self.config.nudge)
     }
@@ -625,6 +692,7 @@ impl CoreEngine {
 
         let grid_cfg = resolved
             .as_ref()
+            .filter(|p| !p.is_unscoped_standard())
             .map(|p| &p.grid)
             .unwrap_or(&self.config.grid);
 
@@ -638,6 +706,7 @@ impl CoreEngine {
 
         self.active_monitor_id = Some(monitor.id.clone());
         self.active_preset = resolved;
+        self.explicit_preset_id = explicit_preset_id.map(str::to_string);
         self.primary_grid = Some(grid);
         self.subgrid = None;
         self.label_badges.clear();
@@ -673,6 +742,7 @@ impl CoreEngine {
         .cloned();
 
         self.active_preset = resolved;
+        self.explicit_preset_id = explicit_preset_id.map(str::to_string);
         self.primary_grid = None;
         self.subgrid = None;
         self.label_badges.clear();
@@ -724,6 +794,7 @@ impl CoreEngine {
         }
 
         self.mode = EngineMode::Normal;
+        self.explicit_preset_id = None;
         self.primary_grid = None;
         self.subgrid = None;
         self.label_badges.clear();
@@ -1017,7 +1088,7 @@ impl CoreEngine {
                 monitor_id: target_id,
             });
         } else {
-            let preset_id = self.active_preset.as_ref().map(|p| p.id.clone());
+            let preset_id = self.explicit_preset_id.clone();
             self.activate_grid(Some(&target_id), preset_id.as_deref(), effects);
         }
     }
@@ -1041,6 +1112,10 @@ impl CoreEngine {
             &active_mon,
             &self.layout,
         );
+        if !self.typed_prefix.is_empty() {
+            self.typed_prefix.clear();
+            effects.push(EngineEffect::ClearKeyBuffer);
+        }
         self.last_nudge_step = step;
         self.mode = EngineMode::Nudge;
         self.move_cursor_to(new_pt, Some(&new_mon_id), effects);
@@ -1570,5 +1645,325 @@ mod tests {
         let json = serde_json::to_string(&out.snapshot).unwrap();
         let parsed: OverlaySnapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, out.snapshot);
+    }
+
+    fn config_18x26_case_sensitive_with_3x3_subgrid() -> RatPoisonConfig {
+        let mut cfg = RatPoisonConfig::default();
+        cfg.grid.rows = 18;
+        cfg.grid.cols = 26;
+        cfg.grid.subgrid_rows = 3;
+        cfg.grid.subgrid_cols = 3;
+        cfg.grid.label_scheme.case_sensitive = true;
+        cfg.grid.label_scheme.alphabet =
+            "asdfghjklqwertyuiopzxcvbnmASDFGHJKLQWERTYUIOPZXCVBNM"
+                .chars()
+                .collect();
+        cfg.grid.label_scheme.second_alphabet = None;
+        cfg.nudge.coarse_px = 30.0;
+        cfg.nudge.normal_px = 10.0;
+        cfg.nudge.fine_px = 2.0;
+        cfg
+    }
+
+    #[test]
+    fn live_config_grid_18x26_and_nudge_honored_over_default_standard_preset() {
+        let cfg = config_18x26_case_sensitive_with_3x3_subgrid();
+        // Built-in default "standard" preset is still 16x12 in cfg.presets!
+        assert_eq!(cfg.presets[0].id, "standard");
+        assert_eq!(cfg.presets[0].grid.cols, 16);
+        assert_eq!(cfg.presets[0].grid.rows, 12);
+
+        // 1. CoreEngine::new with 18x26 live config
+        let mut engine = CoreEngine::new(cfg.clone(), dual_mixed_dpi_layout());
+        let out = engine.handle_event(EngineEvent::ActivateGrid {
+            monitor_id: None,
+            preset_id: None,
+        });
+        assert_eq!(out.snapshot.mode, EngineMode::Grid);
+        assert_eq!(out.snapshot.active_preset_id.as_deref(), Some("standard"));
+        assert_eq!(out.snapshot.grid_cells.len(), 18 * 26);
+        assert_eq!(out.snapshot.grid_dimensions(), (18, 26));
+
+        // 2. Starting from default 16x12 and updating via ConfigUpdated in Normal mode
+        let mut engine2 = CoreEngine::new(RatPoisonConfig::default(), dual_mixed_dpi_layout());
+        engine2.handle_event(EngineEvent::ConfigUpdated {
+            config: Box::new(cfg.clone()),
+        });
+        let out2 = engine2.handle_event(EngineEvent::ActivateGrid {
+            monitor_id: None,
+            preset_id: None,
+        });
+        assert_eq!(out2.snapshot.grid_cells.len(), 18 * 26);
+        assert_eq!(out2.snapshot.grid_dimensions(), (18, 26));
+
+        // 3. Updating via ConfigUpdated while Grid is already open refreshes grid live
+        let mut smaller = cfg.clone();
+        smaller.grid.rows = 10;
+        smaller.grid.cols = 14;
+        let out3 = engine2.handle_event(EngineEvent::ConfigUpdated {
+            config: Box::new(smaller),
+        });
+        assert_eq!(out3.snapshot.mode, EngineMode::Grid);
+        assert_eq!(out3.snapshot.grid_cells.len(), 10 * 14);
+        assert_eq!(out3.snapshot.grid_dimensions(), (10, 14));
+
+        // 4. Live free_mode config is also honored when using default standard preset
+        let mut custom_free = RatPoisonConfig::default();
+        custom_free.free_mode.scroll_speed = 50.0;
+        let mut engine3 = CoreEngine::new(custom_free, dual_mixed_dpi_layout());
+        engine3.handle_event(EngineEvent::ActivateFreeMode { preset_id: None });
+        engine3.handle_event(EngineEvent::FreeModeKeyDown {
+            key: FreeKey::ScrollUp,
+        });
+        let tick = engine3.handle_event(EngineEvent::FreeModeTick { dt_ms: 100 });
+        let scroll_y = tick.effects.iter().find_map(|e| match e {
+            EngineEffect::Scroll { delta_y, .. } => Some(*delta_y),
+            _ => None,
+        });
+        assert!((scroll_y.unwrap() - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn subgrid_18x26_exact_jump_coordinates_and_case_insensitive_keys_on_retina_and_offset_display()
+    {
+        let layout = dual_mixed_dpi_layout();
+        let cfg = config_18x26_case_sensitive_with_3x3_subgrid();
+        let sub_keys = ['q', 'w', 'e', 'a', 's', 'd', 'z', 'x', 'c'];
+
+        for monitor_id in ["PRIMARY", "LEFT"] {
+            let mon = layout.by_id(monitor_id).unwrap().clone();
+            let mut engine = CoreEngine::new(cfg.clone(), layout.clone());
+
+            let out = engine.handle_event(EngineEvent::ActivateGrid {
+                monitor_id: Some(monitor_id.to_string()),
+                preset_id: None,
+            });
+            assert_eq!(out.snapshot.grid_dimensions(), (18, 26));
+
+            // Check top-left (0, 0), interior (9, 13), and bottom-right (17, 25) primary cells
+            for (row, col) in [(0usize, 0usize), (9, 13), (17, 25)] {
+                let target_cell = out.snapshot.grid_cells[row * 26 + col].clone();
+                let mut chars = target_cell.label.chars();
+                let c1 = chars.next().unwrap();
+                let c2 = chars.next().unwrap();
+
+                let p1 = engine.handle_event(EngineEvent::KeyChar { ch: c1 });
+                assert_eq!(p1.snapshot.mode, EngineMode::Grid);
+
+                let p2 = engine.handle_event(EngineEvent::KeyChar { ch: c2 });
+                assert_eq!(p2.snapshot.mode, EngineMode::Subgrid);
+                assert_eq!(p2.snapshot.subgrid_dimensions(), (3, 3));
+                assert_eq!(p2.snapshot.subgrid_rect, Some(target_cell.rect));
+
+                // Cursor jumped to exact primary cell center
+                let expected_parent_phys = logical_to_physical_clamped(target_cell.center, &mon);
+                assert!((engine.cursor_logical().x - target_cell.center.x).abs() < 1e-9);
+                assert!((engine.cursor_logical().y - target_cell.center.y).abs() < 1e-9);
+                assert!(p2.effects.iter().any(|e| matches!(
+                    e,
+                    EngineEffect::MoveCursor {
+                        physical,
+                        monitor_id: mid,
+                        ..
+                    } if *physical == expected_parent_phys && mid == monitor_id
+                )));
+
+                // Now test EVERY ONE of the 9 subgrid cells (mixing lower & UPPER case keys!)
+                for (idx, &key) in sub_keys.iter().enumerate() {
+                    let sr = idx / 3;
+                    let sc = idx % 3;
+                    let sx0 = target_cell.rect.x + (sc as f64) * target_cell.rect.width / 3.0;
+                    let sx1 = if sc == 2 {
+                        target_cell.rect.right()
+                    } else {
+                        target_cell.rect.x + ((sc + 1) as f64) * target_cell.rect.width / 3.0
+                    };
+                    let sy0 = target_cell.rect.y + (sr as f64) * target_cell.rect.height / 3.0;
+                    let sy1 = if sr == 2 {
+                        target_cell.rect.bottom()
+                    } else {
+                        target_cell.rect.y + ((sr + 1) as f64) * target_cell.rect.height / 3.0
+                    };
+                    let expected_logical =
+                        LogicalPoint::new((sx0 + sx1) * 0.5, (sy0 + sy1) * 0.5);
+                    let expected_phys = logical_to_physical_clamped(expected_logical, &mon);
+
+                    // Alternate lowercase & uppercase to prove case-insensitive subgrid matching
+                    let pressed = if idx % 2 == 1 {
+                        key.to_ascii_uppercase()
+                    } else {
+                        key
+                    };
+                    let sub_step = engine.handle_event(EngineEvent::KeyChar { ch: pressed });
+                    assert_eq!(
+                        sub_step.snapshot.mode,
+                        EngineMode::Nudge,
+                        "monitor={monitor_id} cell=({row},{col}) key='{pressed}'"
+                    );
+                    assert!(target_cell.rect.contains_point_inclusive(expected_logical));
+                    assert!(
+                        (engine.cursor_logical().x - expected_logical.x).abs() < 1e-9,
+                        "logical x mismatch on {monitor_id} cell ({row},{col}) sub '{pressed}'"
+                    );
+                    assert!(
+                        (engine.cursor_logical().y - expected_logical.y).abs() < 1e-9,
+                        "logical y mismatch on {monitor_id} cell ({row},{col}) sub '{pressed}'"
+                    );
+                    assert_eq!(sub_step.snapshot.cursor_preview, Some(engine.cursor_logical()));
+                    assert!(sub_step.effects.iter().any(|e| matches!(
+                        e,
+                        EngineEffect::MoveCursor {
+                            physical,
+                            monitor_id: mid,
+                            ..
+                        } if *physical == expected_phys && mid == monitor_id
+                    )));
+
+                    // Step back Nudge -> Subgrid to test the remaining subgrid keys
+                    let back = engine.handle_event(EngineEvent::Backspace);
+                    assert_eq!(back.snapshot.mode, EngineMode::Subgrid);
+                }
+
+                // Step back Subgrid -> Grid for next primary cell
+                let back_grid = engine.handle_event(EngineEvent::Backspace);
+                assert_eq!(back_grid.snapshot.mode, EngineMode::Grid);
+            }
+        }
+    }
+
+    #[test]
+    fn nudge_works_in_grid_subgrid_and_nudge_modes_with_live_config_and_clamping() {
+        let mut cfg = config_18x26_case_sensitive_with_3x3_subgrid();
+        let mut engine = CoreEngine::new(cfg.clone(), dual_mixed_dpi_layout());
+
+        // 1. Nudge directly from Grid mode (even after a partial typed prefix)
+        engine.handle_event(EngineEvent::SyncCursor {
+            logical: LogicalPoint::new(500.0, 400.0),
+        });
+        engine.handle_event(EngineEvent::ActivateGrid {
+            monitor_id: None,
+            preset_id: None,
+        });
+        engine.handle_event(EngineEvent::KeyChar { ch: 'a' });
+        let out = engine.handle_event(EngineEvent::Nudge {
+            direction: Direction::Right,
+            step: NudgeStep::Normal,
+        });
+        assert_eq!(out.snapshot.mode, EngineMode::Nudge);
+        assert_eq!(out.snapshot.typed_prefix, "");
+        assert!((engine.cursor_logical().x - 510.0).abs() < 1e-9);
+        assert!((engine.cursor_logical().y - 400.0).abs() < 1e-9);
+        assert_eq!(out.snapshot.cursor_preview, Some(engine.cursor_logical()));
+        assert!(out
+            .effects
+            .iter()
+            .any(|e| matches!(e, EngineEffect::ClearKeyBuffer)));
+
+        // 2. Nudge directly from Subgrid mode
+        engine.handle_event(EngineEvent::ExitToNormal);
+        let grid_out = engine.handle_event(EngineEvent::ActivateGrid {
+            monitor_id: None,
+            preset_id: None,
+        });
+        let mid_cell = grid_out.snapshot.grid_cells[5 * 26 + 10].clone();
+        for ch in mid_cell.label.chars() {
+            engine.handle_event(EngineEvent::KeyChar { ch });
+        }
+        assert_eq!(engine.mode(), EngineMode::Subgrid);
+        let sub_nudge = engine.handle_event(EngineEvent::Nudge {
+            direction: Direction::Up,
+            step: NudgeStep::Fine,
+        });
+        assert_eq!(sub_nudge.snapshot.mode, EngineMode::Nudge);
+        assert!((engine.cursor_logical().x - mid_cell.center.x).abs() < 1e-9);
+        assert!((engine.cursor_logical().y - (mid_cell.center.y - 2.0)).abs() < 1e-9);
+        assert_eq!(
+            sub_nudge.snapshot.cursor_preview,
+            Some(engine.cursor_logical())
+        );
+
+        // 3. Continued Fine / Normal / Coarse nudges in Nudge mode
+        let before = engine.cursor_logical();
+        let coarse_down = engine.handle_event(EngineEvent::Nudge {
+            direction: Direction::Down,
+            step: NudgeStep::Coarse,
+        });
+        assert_eq!(coarse_down.snapshot.mode, EngineMode::Nudge);
+        assert!((engine.cursor_logical().y - (before.y + 30.0)).abs() < 1e-9);
+
+        // 4. Clamping to ActiveMonitor vs VirtualDesktop
+        engine.handle_event(EngineEvent::ExitToNormal);
+        engine.handle_event(EngineEvent::SyncCursor {
+            logical: LogicalPoint::new(5.0, 200.0),
+        });
+        engine.handle_event(EngineEvent::ActivateGrid {
+            monitor_id: None,
+            preset_id: None,
+        });
+        let clamped = engine.handle_event(EngineEvent::Nudge {
+            direction: Direction::Left,
+            step: NudgeStep::Coarse,
+        });
+        assert_eq!(clamped.snapshot.active_monitor_id.as_deref(), Some("PRIMARY"));
+        assert!((engine.cursor_logical().x - 0.0).abs() < 1e-9);
+
+        // Switch clamp mode to VirtualDesktop via ConfigUpdated -> nudge crosses onto LEFT
+        cfg.nudge.clamp_mode = crate::grid::NudgeClampMode::VirtualDesktop;
+        engine.handle_event(EngineEvent::ConfigUpdated {
+            config: Box::new(cfg),
+        });
+        let crossed = engine.handle_event(EngineEvent::Nudge {
+            direction: Direction::Left,
+            step: NudgeStep::Coarse,
+        });
+        assert_eq!(crossed.snapshot.active_monitor_id.as_deref(), Some("LEFT"));
+        assert!((engine.cursor_logical().x - (-30.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn monitor_scoped_preset_override_still_applies_across_monitor_switch() {
+        let mut cfg = config_18x26_case_sensitive_with_3x3_subgrid();
+        let mut left_override = WorkflowPreset::quick_select_free_mode();
+        left_override.id = "left_quick".to_string();
+        left_override.scope.monitor_ids = vec!["LEFT".to_string()];
+        cfg.presets.push(left_override);
+
+        let mut engine = CoreEngine::new(cfg, dual_mixed_dpi_layout());
+
+        // PRIMARY has no override -> uses live 18x26 config.grid
+        let primary_out = engine.handle_event(EngineEvent::ActivateGrid {
+            monitor_id: Some("PRIMARY".to_string()),
+            preset_id: None,
+        });
+        assert_eq!(primary_out.snapshot.grid_dimensions(), (18, 26));
+        assert_eq!(
+            primary_out.snapshot.active_preset_id.as_deref(),
+            Some("standard")
+        );
+
+        // Switching to LEFT activates the monitor-scoped 6x4 override
+        let left_out = engine.handle_event(EngineEvent::SwitchMonitor {
+            switch: MonitorSwitch::Direction {
+                direction: Direction::Left,
+            },
+        });
+        assert_eq!(left_out.snapshot.active_monitor_id.as_deref(), Some("LEFT"));
+        assert_eq!(
+            left_out.snapshot.active_preset_id.as_deref(),
+            Some("left_quick")
+        );
+        assert_eq!(left_out.snapshot.grid_dimensions(), (4, 6));
+
+        // Switching back to PRIMARY returns to live 18x26 config.grid
+        let back_out = engine.handle_event(EngineEvent::SwitchMonitor {
+            switch: MonitorSwitch::Direction {
+                direction: Direction::Right,
+            },
+        });
+        assert_eq!(
+            back_out.snapshot.active_monitor_id.as_deref(),
+            Some("PRIMARY")
+        );
+        assert_eq!(back_out.snapshot.grid_dimensions(), (18, 26));
     }
 }

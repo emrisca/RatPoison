@@ -9,6 +9,7 @@ import { useSettingsStore } from '../../store/useSettingsStore';
 
 /**
  * Right-click "Restore Default" floating context menu bound to every SettingRow.
+ * Scales smoothly from the pointer origin (origin-aware popover).
  */
 export function RestoreContextMenu() {
   const contextMenu = useSettingsStore((s) => s.contextMenu);
@@ -50,10 +51,13 @@ export function RestoreContextMenu() {
   const modified = isModifiedPath(config, settingPath, defaultConfig);
 
   // Clamp coordinates so menu never overflows right/bottom window edges
-  const menuW = 248;
-  const menuH = 148;
+  const menuW = 254;
+  const menuH = 156;
+  const clampedRight = contextMenu.x + menuW + 8 > window.innerWidth;
+  const clampedBottom = contextMenu.y + menuH + 8 > window.innerHeight;
   const left = Math.max(8, Math.min(window.innerWidth - menuW - 8, contextMenu.x));
   const top = Math.max(8, Math.min(window.innerHeight - menuH - 8, contextMenu.y));
+  const transformOrigin = `${clampedBottom ? 'bottom' : 'top'} ${clampedRight ? 'right' : 'left'}`;
 
   const handleRestore = async () => {
     closeContextMenu();
@@ -73,7 +77,7 @@ export function RestoreContextMenu() {
     <div
       ref={menuRef}
       className="rp-context-menu"
-      style={{ left: `${left}px`, top: `${top}px` }}
+      style={{ left: `${left}px`, top: `${top}px`, transformOrigin }}
       role="menu"
       aria-label={`Actions for ${settingLabel}`}
     >

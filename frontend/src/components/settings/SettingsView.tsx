@@ -142,6 +142,11 @@ export function SettingsView() {
     return undefined;
   }, [config.appearance.theme]);
 
+  // Reflect in-app reduced motion preference on the document root
+  useEffect(() => {
+    document.documentElement.dataset.reduceMotion = config.appearance.reduceMotion ? 'true' : 'false';
+  }, [config.appearance.reduceMotion]);
+
   // Keyboard shortcut: Cmd/Ctrl+K or '/' focuses live search
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -215,12 +220,15 @@ export function SettingsView() {
   const isSearching = searchQuery.trim().length > 0;
 
   return (
-    <div className="rp-settings-shell">
+    <div
+      className="rp-settings-shell"
+      data-reduce-motion={config.appearance.reduceMotion ? 'true' : 'false'}
+    >
       {/* Left Navigation Sidebar */}
       <aside className="rp-sidebar">
         <div className="rp-brand">
           <div className="rp-brand-mark">
-            <RatBrandIcon size={26} />
+            <RatBrandIcon size={24} />
           </div>
           <div>
             <div className="rp-brand-name">RatPoison</div>
