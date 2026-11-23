@@ -36,7 +36,7 @@ export function UpdatesPanel() {
         </div>
         <div className="rp-status-body">
           <div className="rp-status-headline">
-            <span>RatPoison v{updateResult?.currentVersion ?? '0.1.0'}</span>
+            <span>RatPoison v{updateResult?.currentVersion ?? '0.1.1'}</span>
             {updateResult?.updateAvailable && (
               <span className="rp-update-pill">v{updateResult.latestVersion} available</span>
             )}

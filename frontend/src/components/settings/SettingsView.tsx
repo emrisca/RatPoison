@@ -219,7 +219,7 @@ export function SettingsView() {
           <div>
             <div className="rp-brand-name">RatPoison</div>
             <div className="rp-brand-version">
-              v{updateResult?.currentVersion ?? '0.1.0'} · MIT FOSS
+              v{updateResult?.currentVersion ?? '0.1.1'} · MIT FOSS
             </div>
           </div>
         </div>

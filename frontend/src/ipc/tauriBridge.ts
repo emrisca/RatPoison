@@ -166,8 +166,8 @@ export const GITHUB_RELEASES_URL = 'https://github.com/emrisca/RatPoison/release
 export async function ipcCheckForUpdates(channel: string): Promise<UpdateCheckResult> {
   if (!isTauriRuntime()) {
     return {
-      currentVersion: '0.1.0',
-      latestVersion: channel === 'beta' ? '0.2.0-beta.1' : '0.1.0',
+      currentVersion: '0.1.1',
+      latestVersion: channel === 'beta' ? '0.2.0-beta.1' : '0.1.1',
       updateAvailable: channel === 'beta',
       releaseNotes:
         channel === 'beta'

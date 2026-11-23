@@ -30,6 +30,11 @@
   </provides>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.1.1" date="2026-11-22">
+      <description>
+        <p>Wire native global keyboard hooks (Option+Space, Option+Shift+Space, Option+F), fix macOS Label Mode accessibility scanning, add Free Mode immediate tap stepping, and show an in-app macOS Accessibility permission banner.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-11-22">
       <description>
         <p>Initial cross-platform release with Grid Mode, Free Mode, and Accessibility Tree Label Mode.</p>
