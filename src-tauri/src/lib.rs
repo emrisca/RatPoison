@@ -5,6 +5,7 @@
 
 pub mod bridge;
 pub mod ipc;
+pub mod updater;
 
 use crate::bridge::AppRuntime;
 use crate::ipc::{
@@ -127,12 +128,15 @@ fn get_platform_info(state: State<'_, SharedRuntime>) -> Result<PlatformInfoDto,
 }
 
 #[tauri::command]
-fn check_for_updates(
-    state: State<'_, SharedRuntime>,
-    channel: String,
-) -> Result<UpdateCheckResultDto, String> {
-    let rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
-    rt.check_for_updates(&channel)
+async fn check_for_updates(channel: String) -> Result<UpdateCheckResultDto, String> {
+    tauri::async_runtime::spawn_blocking(move || updater::check_github_releases(&channel))
+        .await
+        .map_err(|err| format!("Update check task failed: {err}"))?
+}
+
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    updater::open_external_url(&url)
 }
 
 #[tauri::command]
@@ -244,6 +248,7 @@ pub fn run() {
             get_monitors,
             get_platform_info,
             check_for_updates,
+            open_external_url,
             toggle_overlay_mode,
         ])
         .run(tauri::generate_context!())
@@ -359,7 +364,7 @@ mod tests {
             default_keybindings_for_os(detect_os())
         );
 
-        let upd = rt.check_for_updates("stable").expect("update check");
+        let upd = updater::resolve_release_from_list(&[], "0.1.0", "stable", detect_os(), false);
         assert_eq!(upd.current_version, "0.1.0");
         assert!(!upd.update_available);
     }

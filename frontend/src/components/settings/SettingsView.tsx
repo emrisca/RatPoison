@@ -61,6 +61,7 @@ export function SettingsView() {
   const defaultConfig = useSettingsStore((s) => s.defaultConfig);
   const config = useSettingsStore((s) => s.config);
   const monitors = useSettingsStore((s) => s.monitors);
+  const updateResult = useSettingsStore((s) => s.updateResult);
   const activeTab = useSettingsStore((s) => s.activeTab);
   const searchQuery = useSettingsStore((s) => s.searchQuery);
   const loading = useSettingsStore((s) => s.loading);
@@ -74,9 +75,11 @@ export function SettingsView() {
   const resetTabToDefaults = useSettingsStore((s) => s.resetTabToDefaults);
   const resetAllDefaults = useSettingsStore((s) => s.resetAllDefaults);
   const applyOsKeybindPreset = useSettingsStore((s) => s.applyOsKeybindPreset);
+  const checkForUpdates = useSettingsStore((s) => s.checkForUpdates);
   const clearFeedback = useSettingsStore((s) => s.clearFeedback);
 
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const autoCheckedUpdatesRef = useRef(false);
   const [confirmResetAll, setConfirmResetAll] = useState(false);
 
   // Load platform info, config, monitors + listen for external config updates
@@ -96,6 +99,15 @@ export function SettingsView() {
       unlisten?.();
     };
   }, [loadInitialData, applyExternalConfig]);
+
+  // Automatically check GitHub Releases once on startup when enabled
+  useEffect(() => {
+    if (loading || autoCheckedUpdatesRef.current) return;
+    autoCheckedUpdatesRef.current = true;
+    if (config.updates.autoCheck) {
+      void checkForUpdates({ silent: true });
+    }
+  }, [loading, config.updates.autoCheck, checkForUpdates]);
 
   // Apply Dark / Light / System theme token attribute
   useEffect(() => {
@@ -192,7 +204,9 @@ export function SettingsView() {
           </div>
           <div>
             <div className="rp-brand-name">RatPoison</div>
-            <div className="rp-brand-version">v0.1.0 · MIT FOSS</div>
+            <div className="rp-brand-version">
+              v{updateResult?.currentVersion ?? '0.1.0'} · MIT FOSS
+            </div>
           </div>
         </div>
 
@@ -241,6 +255,13 @@ export function SettingsView() {
                 <span className="rp-nav-label">{tab.label}</span>
                 {isSearching ? (
                   searchCount > 0 && <span className="rp-nav-badge">{searchCount}</span>
+                ) : tab.id === 'updates' && updateResult?.updateAvailable ? (
+                  <span
+                    className="rp-nav-update-badge"
+                    title={`Version v${updateResult.latestVersion} available on GitHub`}
+                  >
+                    NEW
+                  </span>
                 ) : (
                   modifiedCount > 0 && (
                     <span

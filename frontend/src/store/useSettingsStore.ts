@@ -14,6 +14,7 @@ import {
   ipcGetConfig,
   ipcGetMonitors,
   ipcGetPlatformInfo,
+  ipcOpenExternalUrl,
   ipcResetSettingKey,
   ipcUpdateConfig,
 } from '../ipc/tauriBridge';
@@ -61,7 +62,8 @@ export interface SettingsStoreState {
   openContextMenu: (x: number, y: number, settingPath: string, settingLabel: string) => void;
   closeContextMenu: () => void;
 
-  checkForUpdates: () => Promise<void>;
+  checkForUpdates: (options?: { silent?: boolean }) => Promise<void>;
+  openExternalUrl: (url: string) => Promise<void>;
   clearFeedback: () => void;
 }
 
@@ -242,22 +244,49 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
       contextMenu: { ...state.contextMenu, open: false },
     })),
 
-  checkForUpdates: async () => {
-    set({ busyAction: 'updates', errorMessage: null });
+  checkForUpdates: async (options) => {
+    const silent = options?.silent ?? false;
+    if (!silent) {
+      set({ busyAction: 'updates', errorMessage: null });
+    }
     try {
       const updateResult = await ipcCheckForUpdates(get().config.updates.channel);
-      set({
-        updateResult,
-        busyAction: null,
-        toastMessage: updateResult.updateAvailable
-          ? `Update v${updateResult.latestVersion} available`
-          : 'RatPoison is up to date',
-      });
-      scheduleToastClear(set);
+      if (silent) {
+        set({
+          updateResult,
+          ...(updateResult.updateAvailable
+            ? { toastMessage: `Update v${updateResult.latestVersion} available on GitHub` }
+            : {}),
+        });
+        if (updateResult.updateAvailable) {
+          scheduleToastClear(set);
+        }
+      } else {
+        set({
+          updateResult,
+          busyAction: null,
+          toastMessage: updateResult.updateAvailable
+            ? `Update v${updateResult.latestVersion} available`
+            : 'RatPoison is up to date',
+        });
+        scheduleToastClear(set);
+      }
+    } catch (err) {
+      if (!silent) {
+        set({
+          busyAction: null,
+          errorMessage: err instanceof Error ? err.message : 'Update check failed',
+        });
+      }
+    }
+  },
+
+  openExternalUrl: async (url) => {
+    try {
+      await ipcOpenExternalUrl(url);
     } catch (err) {
       set({
-        busyAction: null,
-        errorMessage: err instanceof Error ? err.message : 'Update check failed',
+        errorMessage: err instanceof Error ? err.message : 'Failed to open external link',
       });
     }
   },

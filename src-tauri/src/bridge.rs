@@ -2,9 +2,8 @@
 //! and `ratpoison-a11y` inside the Tauri v2 desktop shell.
 
 use crate::ipc::{
-    detect_platform_info, format_unix_iso8601, project_snapshot_to_overlay_payload,
-    resolve_data_dir, unix_timestamp_secs, ConfigStore, MonitorDto, OverlayStatePayloadDto,
-    PlatformInfoDto, UpdateCheckResultDto, EVENT_OVERLAY_STATE,
+    detect_platform_info, project_snapshot_to_overlay_payload, resolve_data_dir, ConfigStore,
+    MonitorDto, OverlayStatePayloadDto, PlatformInfoDto, EVENT_OVERLAY_STATE,
 };
 use ratpoison_a11y::{
     default_platform_provider, generate_label_badges, AccessibilityBudget, AccessibilityProvider,
@@ -81,37 +80,6 @@ impl AppRuntime {
 
     pub fn platform_info_dto(&self) -> PlatformInfoDto {
         detect_platform_info()
-    }
-
-    pub fn check_for_updates(&self, channel_str: &str) -> Result<UpdateCheckResultDto, String> {
-        let current_str = env!("CARGO_PKG_VERSION");
-        let channel = if channel_str.eq_ignore_ascii_case("beta") {
-            "beta"
-        } else {
-            "stable"
-        };
-        let now_iso = format_unix_iso8601(unix_timestamp_secs());
-        let is_flatpak =
-            std::env::var_os("FLATPAK_ID").is_some() || std::path::Path::new("/.flatpak-info").exists();
-
-        let release_notes = if is_flatpak {
-            format!(
-                "RatPoison v{current_str} ({channel} channel) is managed via Flatpak (`flatpak update io.github.emrisca.RatPoison`)."
-            )
-        } else {
-            format!(
-                "RatPoison v{current_str} ({channel} channel) — open-source MIT builds are published at https://github.com/emrisca/RatPoison/releases."
-            )
-        };
-
-        Ok(UpdateCheckResultDto {
-            current_version: current_str.to_string(),
-            latest_version: current_str.to_string(),
-            update_available: false,
-            release_notes,
-            published_at: now_iso,
-            download_url: Some("https://github.com/emrisca/RatPoison/releases".to_string()),
-        })
     }
 
     pub fn sync_core_config_from_store(&mut self) {

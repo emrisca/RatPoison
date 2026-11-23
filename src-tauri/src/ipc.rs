@@ -248,6 +248,10 @@ pub struct UpdateCheckResultDto {
     pub published_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub download_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset_name: Option<String>,
 }
 
 /// Returns current UNIX epoch timestamp in seconds.

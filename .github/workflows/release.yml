@@ -85,12 +85,13 @@ jobs:
           TAG: ${{ steps.release_tag.outputs.tag }}
           PRERELEASE: ${{ steps.release_tag.outputs.prerelease }}
         run: |
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
+          if ! gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             PRERELEASE_FLAG=""
             if [ "$PRERELEASE" = "true" ]; then
               PRERELEASE_FLAG="--prerelease"
             fi
             gh release create "$TAG" \
+              --repo "${{ github.repository }}" \
               --draft \
               $PRERELEASE_FLAG \
               --title "RatPoison ${TAG}" \
@@ -182,4 +183,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.verify.outputs.tag }}
         run: |
-          gh release edit "$TAG" --draft=false
+          gh release edit "$TAG" --repo "${{ github.repository }}" --draft=false

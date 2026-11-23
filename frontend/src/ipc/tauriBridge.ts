@@ -160,6 +160,8 @@ export async function ipcGetMonitors(): Promise<MonitorInfo[]> {
   return invoke<MonitorInfo[]>(TAURI_COMMANDS.GET_MONITORS);
 }
 
+export const GITHUB_RELEASES_URL = 'https://github.com/emrisca/RatPoison/releases';
+
 export async function ipcCheckForUpdates(channel: string): Promise<UpdateCheckResult> {
   if (!isTauriRuntime()) {
     return {
@@ -171,9 +173,20 @@ export async function ipcCheckForUpdates(channel: string): Promise<UpdateCheckRe
           ? '• Sub-frame 120Hz grid rendering\n• Wayland layer-shell preview\n• Collision-aware Label Mode leader lines'
           : 'You are running the latest stable build of RatPoison.',
       publishedAt: new Date().toISOString(),
+      downloadUrl: GITHUB_RELEASES_URL,
+      releaseUrl: GITHUB_RELEASES_URL,
+      assetName: channel === 'beta' ? 'RatPoison_0.2.0-beta.1_universal.dmg' : undefined,
     };
   }
   return invoke<UpdateCheckResult>(TAURI_COMMANDS.CHECK_FOR_UPDATES, { channel });
+}
+
+export async function ipcOpenExternalUrl(url: string): Promise<void> {
+  if (!isTauriRuntime()) {
+    window.open(url, '_blank', 'noopener,noreferrer');
+    return;
+  }
+  await invoke<void>(TAURI_COMMANDS.OPEN_EXTERNAL_URL, { url });
 }
 
 // ---------------------------------------------------------------------------

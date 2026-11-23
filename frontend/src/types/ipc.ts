@@ -222,6 +222,8 @@ export interface UpdateCheckResult {
   releaseNotes: string;
   publishedAt: string;
   downloadUrl?: string;
+  releaseUrl?: string;
+  assetName?: string;
 }
 
 export type SettingsTabId =
@@ -245,4 +247,5 @@ export const TAURI_COMMANDS = {
   GET_MONITORS: 'get_monitors',
   GET_PLATFORM_INFO: 'get_platform_info',
   CHECK_FOR_UPDATES: 'check_for_updates',
+  OPEN_EXTERNAL_URL: 'open_external_url',
 } as const;
