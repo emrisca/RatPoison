@@ -344,6 +344,92 @@ fn map_mouse_button(btn: CoreMouseButton) -> HidMouseButton {
     }
 }
 
+/// Elevates the overlay window so it renders above native popups, context menus,
+/// dropdowns, the menu bar, and fullscreen apps without activating or stealing focus.
+///
+/// On macOS, Tauri's `set_always_on_top(true)` only raises the `NSWindow` to
+/// `NSFloatingWindowLevel` (3), which sits below `NSPopUpMenuWindowLevel` (101).
+/// Setting `NSScreenSaverWindowLevel` (1000) plus `FullScreenAuxiliary` /
+/// `CanJoinAllSpaces` / `Stationary` / `IgnoresCycle` keeps the click-through
+/// overlay strictly above popups and menus while never dismissing them.
+pub(crate) fn configure_overlay_window(overlay: &tauri::WebviewWindow, order_front: bool) {
+    let _ = overlay.set_ignore_cursor_events(true);
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = order_front;
+        let _ = overlay.set_always_on_top(true);
+        let _ = overlay.set_visible_on_all_workspaces(true);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        elevate_macos_overlay_window(overlay, order_front);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn elevate_macos_overlay_window(overlay: &tauri::WebviewWindow, order_front: bool) {
+    use std::ffi::{c_char, c_void};
+
+    const K_CG_SCREEN_SAVER_WINDOW_LEVEL_KEY: i32 = 13;
+    // NSWindowCollectionBehaviorCanJoinAllSpaces (1 << 0)
+    // | NSWindowCollectionBehaviorStationary (1 << 4)
+    // | NSWindowCollectionBehaviorIgnoresCycle (1 << 6)
+    // | NSWindowCollectionBehaviorFullScreenAuxiliary (1 << 8)
+    const OVERLAY_COLLECTION_BEHAVIOR: usize = (1 << 0) | (1 << 4) | (1 << 6) | (1 << 8);
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGWindowLevelForKey(key: i32) -> i32;
+    }
+
+    #[link(name = "objc")]
+    extern "C" {
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn objc_msgSend();
+    }
+
+    let Ok(ns_window) = overlay.ns_window() else {
+        let _ = overlay.set_always_on_top(true);
+        let _ = overlay.set_visible_on_all_workspaces(true);
+        return;
+    };
+    if ns_window.is_null() {
+        return;
+    }
+
+    // SAFETY: `ns_window` is a valid `NSWindow*` accessed on the macOS main thread.
+    // Every `objc_msgSend` call is cast to the exact C ABI signature for the selector
+    // so both `aarch64` and `x86_64` calling conventions match AppKit.
+    unsafe {
+        let level = CGWindowLevelForKey(K_CG_SCREEN_SAVER_WINDOW_LEVEL_KEY) as isize;
+        let msg_send_ptr = objc_msgSend as *const c_void;
+
+        let sel_set_level = sel_registerName(c"setLevel:".as_ptr());
+        let set_level: extern "C" fn(*mut c_void, *mut c_void, isize) =
+            std::mem::transmute(msg_send_ptr);
+        set_level(ns_window, sel_set_level, level);
+
+        let sel_set_behavior = sel_registerName(c"setCollectionBehavior:".as_ptr());
+        let set_behavior: extern "C" fn(*mut c_void, *mut c_void, usize) =
+            std::mem::transmute(msg_send_ptr);
+        set_behavior(ns_window, sel_set_behavior, OVERLAY_COLLECTION_BEHAVIOR);
+
+        let sel_set_hides = sel_registerName(c"setHidesOnDeactivate:".as_ptr());
+        let set_hides: extern "C" fn(*mut c_void, *mut c_void, i8) =
+            std::mem::transmute(msg_send_ptr);
+        set_hides(ns_window, sel_set_hides, 0);
+
+        if order_front {
+            let sel_order_front = sel_registerName(c"orderFrontRegardless".as_ptr());
+            let order_front_fn: extern "C" fn(*mut c_void, *mut c_void) =
+                std::mem::transmute(msg_send_ptr);
+            order_front_fn(ns_window, sel_order_front);
+        }
+    }
+}
+
 fn position_and_show_overlay(app: &AppHandle, monitor: &MonitorInfo) {
     let app_handle = app.clone();
     let x = monitor.logical_rect.x;
@@ -352,12 +438,11 @@ fn position_and_show_overlay(app: &AppHandle, monitor: &MonitorInfo) {
     let h = monitor.logical_rect.height;
     let _ = app.run_on_main_thread(move || {
         if let Some(overlay) = app_handle.get_webview_window("overlay") {
-            let _ = overlay.set_ignore_cursor_events(true);
-            let _ = overlay.set_always_on_top(true);
-            let _ = overlay.set_visible_on_all_workspaces(true);
+            configure_overlay_window(&overlay, false);
             let _ = overlay.set_position(LogicalPosition::new(x, y));
             let _ = overlay.set_size(LogicalSize::new(w, h));
             let _ = overlay.show();
+            configure_overlay_window(&overlay, true);
         }
     });
 }

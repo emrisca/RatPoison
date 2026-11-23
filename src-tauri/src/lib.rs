@@ -545,11 +545,9 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle();
 
-            // Strictly enforce click-through on the overlay window from the moment it exists.
+            // Strictly enforce click-through and popup-overriding elevation from the moment it exists.
             if let Some(overlay) = app.get_webview_window("overlay") {
-                let _ = overlay.set_ignore_cursor_events(true);
-                let _ = overlay.set_always_on_top(true);
-                let _ = overlay.set_visible_on_all_workspaces(true);
+                bridge::configure_overlay_window(&overlay, false);
             }
 
             let monitors = query_tauri_monitors(handle);
