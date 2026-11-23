@@ -258,19 +258,19 @@ function drawCrosshairOverlay(
   ctx.lineWidth = 1.5;
   ctx.stroke();
 
-  // Compact translucent coordinate pill
+  // Compact translucent coordinate pill placed strictly OUTSIDE the subgrid box so it
+  // never covers any subgrid cell letters (`q w e a s d z x c`) or the top/bottom tag pill.
   const coordText = `${Math.round(coordXVal)}, ${Math.round(coordYVal)}`;
   ctx.font = `600 10px ${app.gridFontFamily}`;
   const coordW = ctx.measureText(coordText).width + 12;
   const coordH = 18;
+  const gap = 8;
   const pillX =
-    alignedX + 10 + coordW <= viewportW - 6
-      ? alignedX + 10
-      : Math.max(6, alignedX - coordW - 10);
-  const pillY =
-    alignedY + 10 + coordH <= viewportH - 6
-      ? alignedY + 10
-      : Math.max(6, alignedY - coordH - 10);
+    boxX + boxW + gap + coordW <= viewportW - 6
+      ? boxX + boxW + gap
+      : Math.max(6, boxX - coordW - gap);
+  const idealY = boxY + (boxH - coordH) / 2;
+  const pillY = Math.max(6, Math.min(viewportH - coordH - 6, idealY));
 
   drawRoundedRect(ctx, pillX, pillY, coordW, coordH, 5);
   ctx.fillStyle = 'rgba(28, 28, 30, 0.88)';
