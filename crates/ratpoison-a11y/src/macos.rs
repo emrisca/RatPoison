@@ -271,6 +271,7 @@ pub fn is_pure_structural_ax_role(ax_role: &str) -> bool {
             | "AXScrollArea"
             | "AXSplitGroup"
             | "AXToolbar"
+            | "AXTabGroup"
             | "AXLayoutArea"
             | "AXWebArea"
             | "AXSheet"
@@ -353,7 +354,8 @@ pub fn map_ax_role(ax_role: &str, ax_subrole: Option<&str>) -> ElementRole {
         "AXRadioButton" => ElementRole::Radio,
         "AXCheckBox" => ElementRole::Checkbox,
         "AXSlider" => ElementRole::Slider,
-        "AXTabGroup" | "AXTab" => ElementRole::Tab,
+        "AXTab" => ElementRole::Tab,
+        "AXTabGroup" => ElementRole::Container,
         "AXRow" | "AXCell" | "AXOutlineRow" => ElementRole::ListItem,
         "AXToolbar" => ElementRole::Toolbar,
         "AXWindow" | "AXSheet" | "AXDrawer" => ElementRole::Window,
@@ -657,7 +659,7 @@ impl MacOSAccessibilityProvider {
             if let Some(action) = unsafe { cfstring_to_string(item) } {
                 if matches!(
                     action.as_str(),
-                    "AXPress" | "AXConfirm" | "AXShowMenu" | "AXPick" | "AXOpen"
+                    "AXPress" | "AXConfirm" | "AXPick" | "AXOpen"
                 ) {
                     return true;
                 }

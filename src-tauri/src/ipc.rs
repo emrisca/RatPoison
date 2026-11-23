@@ -617,7 +617,7 @@ pub fn default_frontend_config_json_for_os(os: &str) -> Value {
             "collisionAvoidance": true,
             "includeMenubar": true,
             "includeDock": true,
-            "showElementRoleHint": true,
+            "showElementRoleHint": false,
             "badgePlacement": "smart"
         },
         "keybindings": kb,
@@ -637,13 +637,13 @@ pub fn default_frontend_config_json_for_os(os: &str) -> Value {
             "subgridBgOpacity": 0.36,
             "crosshairColor": "#64D2FF",
             "labelBgColor": "#1C1C1E",
-            "labelBgOpacity": 0.92,
+            "labelBgOpacity": 0.94,
             "labelBorderColor": "#0A84FF",
             "labelTextColor": "#F5F5F7",
             "labelMatchPrefixColor": "#64D2FF",
             "labelFontFamily": "ui-monospace, \"SF Mono\", Menlo, Consolas, monospace",
-            "labelFontSize": 12,
-            "labelBorderRadius": 6,
+            "labelFontSize": 11,
+            "labelBorderRadius": 5,
             "hudBgColor": "#1C1C1E",
             "hudTextColor": "#F5F5F7",
             "hudAccentColor": "#0A84FF",
@@ -795,6 +795,11 @@ impl ConfigStore {
                             == Some(1.85)
                     {
                         set_json_path(&mut merged, "grid.enableSubgridZoom", Value::Bool(false));
+                    }
+                    if get_json_path(&merged, "labelMode.showElementRoleHint").and_then(Value::as_bool)
+                        == Some(true)
+                    {
+                        set_json_path(&mut merged, "labelMode.showElementRoleHint", Value::Bool(false));
                         }
                 }
             }

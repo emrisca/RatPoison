@@ -69,67 +69,69 @@ export function LabelLayer() {
   }
 
   const prefixLen = typedPrefix.length;
+  const visiblePlaced =
+    prefixLen > 0 ? placedBadges.filter(({ badge }) => badge.matchedPrefix) : placedBadges;
+  // Compact Keycap Mode (Homerow/Vimium style): suppress wireframe bounding boxes when the
+  // full page is labeled, revealing crisp target outlines once narrowed to <= 6 matches.
+  const showTargetFrames = visiblePlaced.length <= 6;
 
   return (
     <div className="rp-label-layer" aria-hidden="true">
-      {/* SVG layer for subtle accessibility bounding-box frames & collision leader lines */}
-      <svg
-        className="rp-label-svg"
-        width={viewportW}
-        height={viewportH}
-        viewBox={`0 0 ${viewportW} ${viewportH}`}
-      >
-        {placedBadges.map(({ badge, pillRect, anchorPoint, wasShifted }) => {
-          if (!badge.matchedPrefix && prefixLen > 0) return null;
-          const pillCx = pillRect.x + pillRect.width / 2;
-          const pillCy = pillRect.y + pillRect.height / 2;
+      {/* Focused target outline layer — rendered only when narrowed or exact-matched */}
+      {showTargetFrames && (
+        <svg
+          className="rp-label-svg"
+          width={viewportW}
+          height={viewportH}
+          viewBox={`0 0 ${viewportW} ${viewportH}`}
+        >
+          {visiblePlaced.map(({ badge, pillRect, anchorPoint, wasShifted }) => {
+            const pillCx = pillRect.x + pillRect.width / 2;
+            const pillCy = pillRect.y + pillRect.height / 2;
 
-          return (
-            <g key={`svg-${badge.id}`}>
-              {/* Subtle target bounding box hairline */}
-              <rect
-                x={badge.rect.x}
-                y={badge.rect.y}
-                width={badge.rect.width}
-                height={badge.rect.height}
-                rx={5}
-                fill={badge.exactMatch ? hexToRgba(app.labelBorderColor, 0.16) : 'transparent'}
-                stroke={
-                  badge.exactMatch
-                    ? app.labelMatchPrefixColor
-                    : hexToRgba(app.labelBorderColor, 0.48)
-                }
-                strokeWidth={badge.exactMatch ? 1.5 : 1}
-              />
-              {/* Leader line when collision avoidance nudged the pill */}
-              {wasShifted && (
-                <>
-                  <line
-                    x1={anchorPoint.x}
-                    y1={anchorPoint.y}
-                    x2={pillCx}
-                    y2={pillCy}
-                    stroke={hexToRgba(app.labelBorderColor, 0.72)}
-                    strokeWidth={1}
-                    strokeDasharray="3 2"
-                  />
-                  <circle
-                    cx={anchorPoint.x}
-                    cy={anchorPoint.y}
-                    r={2.25}
-                    fill={app.labelBorderColor}
-                  />
-                </>
-              )}
-            </g>
-          );
-        })}
-      </svg>
+            return (
+              <g key={`svg-${badge.id}`}>
+                <rect
+                  x={badge.rect.x}
+                  y={badge.rect.y}
+                  width={badge.rect.width}
+                  height={badge.rect.height}
+                  rx={5}
+                  fill={hexToRgba(app.labelBorderColor, badge.exactMatch ? 0.16 : 0.08)}
+                  stroke={
+                    badge.exactMatch
+                      ? app.labelMatchPrefixColor
+                      : hexToRgba(app.labelBorderColor, 0.65)
+                  }
+                  strokeWidth={badge.exactMatch ? 1.5 : 1}
+                />
+                {wasShifted && (
+                  <>
+                    <line
+                      x1={anchorPoint.x}
+                      y1={anchorPoint.y}
+                      x2={pillCx}
+                      y2={pillCy}
+                      stroke={hexToRgba(app.labelBorderColor, 0.55)}
+                      strokeWidth={1}
+                      strokeDasharray="2 2"
+                    />
+                    <circle
+                      cx={anchorPoint.x}
+                      cy={anchorPoint.y}
+                      r={2}
+                      fill={app.labelBorderColor}
+                    />
+                  </>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      )}
 
-      {/* High-contrast composited hint pills */}
-      {placedBadges.map(({ badge, pillRect }) => {
-        const isFilteredOut = prefixLen > 0 && !badge.matchedPrefix;
-        if (isFilteredOut) return null;
+      {/* Compact, high-contrast Homerow/Vimium-style keycap pills */}
+      {visiblePlaced.map(({ badge, pillRect }) => {
 
         const matchedChars = prefixLen > 0 ? badge.code.slice(0, prefixLen) : '';
         const remainingChars = prefixLen > 0 ? badge.code.slice(prefixLen) : badge.code;

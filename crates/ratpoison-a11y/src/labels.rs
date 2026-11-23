@@ -3,7 +3,7 @@
 //! Performs spatial filtering, occlusion pruning, bounding-box IoU & centroid deduplication,
 //! and assigns prefix-free ergonomic home-row-first 1–2 character hint labels.
 
-use crate::{AccessibleElement, LogicalPoint, LogicalRect};
+use crate::{AccessibleElement, ElementRole, LogicalPoint, LogicalRect};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -129,12 +129,18 @@ pub fn generate_label_badges(
     config: &LabelConfig,
 ) -> Vec<LabelBadge> {
     // 1. Basic visibility, actionability, and viewport intersection filter.
+    // Drop oversized structural boxes (>30% of viewport area) that represent whole panels/containers.
+    let max_element_area = (config.viewport.area() * 0.30).max(1.0);
     let mut candidates: Vec<(AccessibleElement, LogicalRect)> = elements
         .iter()
         .filter(|el| el.is_visible && (el.is_clickable || el.role.is_default_interactive()))
+        .filter(|el| !matches!(el.role, ElementRole::Window | ElementRole::Toolbar))
         .filter_map(|el| {
             let clipped = el.bounds.intersection(&config.viewport)?;
-            if clipped.width >= config.min_dimension && clipped.height >= config.min_dimension {
+            if clipped.width >= config.min_dimension
+                && clipped.height >= config.min_dimension
+                && clipped.area() <= max_element_area
+            {
                 Some((el.clone(), clipped))
             } else {
                 None
@@ -181,6 +187,20 @@ pub fn generate_label_badges(
                         continue 'candidate_loop;
                     }
                 }
+            }
+
+            // Check 2c: Suppress redundant wrapper containers (`Container`, `Unknown`, `ListItem`)
+            // that enclose a smaller, already-kept specific interactive child (e.g. a `Link` or `Button`
+            // inside a `ListItem` row or `AXGroup` card). Because candidates are sorted by area ascending,
+            // inner interactive controls are always evaluated first.
+            if matches!(
+                cand_el.role,
+                ElementRole::Container | ElementRole::Unknown | ElementRole::ListItem
+            ) && kept_el.z_order == cand_el.z_order
+                && cand_rect.contains_point(&kept_center)
+                && kept_rect.area() < cand_rect.area()
+            {
+                continue 'candidate_loop;
             }
         }
 

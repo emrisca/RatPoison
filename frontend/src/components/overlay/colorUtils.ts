@@ -76,35 +76,40 @@ export function resolveLabelCollisions(
   enableAvoidance: boolean,
 ): PlacedLabelBadge[] {
   const placed: PlacedLabelBadge[] = [];
-  const pillH = Math.ceil(fontSize * 1.55);
-  const charW = fontSize * 0.68;
+  const pillH = Math.ceil(fontSize * 1.5);
+  const charW = fontSize * 0.65;
 
-  // Candidate offset ring (spiral search around preferred anchor)
+  // Compact candidate offset ring (spiral search around preferred anchor)
   const offsets: Array<[number, number]> = [
     [0, 0],
-    [0, -(pillH + 4)],
-    [0, pillH + 4],
-    [26, 0],
-    [-26, 0],
-    [28, -(pillH + 4)],
-    [-28, -(pillH + 4)],
-    [28, pillH + 4],
-    [-28, pillH + 4],
-    [0, -2 * (pillH + 4)],
-    [0, 2 * (pillH + 4)],
+    [0, -(pillH + 2)],
+    [0, pillH + 2],
+    [22, 0],
+    [-22, 0],
+    [24, -(pillH + 2)],
+    [-24, -(pillH + 2)],
+    [24, pillH + 2],
+    [-24, pillH + 2],
+    [0, -2 * (pillH + 2)],
+    [0, 2 * (pillH + 2)],
   ];
 
   for (const badge of badges) {
     const roleExtra = showRoleHint && badge.role ? badge.role.length * (fontSize * 0.52) + 8 : 0;
-    const pillW = Math.max(26, Math.ceil(badge.code.length * charW + 14 + roleExtra));
+    const pillW = Math.max(20, Math.ceil(badge.code.length * charW + 10 + roleExtra));
 
     const anchorPoint = computePreferredAnchor(badge, placement);
-    const clampX = (x: number) => Math.max(4, Math.min(viewportWidth - pillW - 4, x));
-    const clampY = (y: number) => Math.max(4, Math.min(viewportHeight - pillH - 4, y));
+    const clampX = (x: number) => Math.max(3, Math.min(viewportWidth - pillW - 3, x));
+    const clampY = (y: number) => Math.max(3, Math.min(viewportHeight - pillH - 3, y));
+
+    const smartY =
+      placement === 'smart' && badge.rect.height <= 44
+        ? badge.rect.y + (badge.rect.height - pillH) * 0.5
+        : anchorPoint.y - pillH * 0.2;
 
     const baseRect: LogicalRect = {
       x: clampX(placement === 'center' ? anchorPoint.x - pillW / 2 : anchorPoint.x),
-      y: clampY(placement === 'center' ? anchorPoint.y - pillH / 2 : anchorPoint.y - pillH * 0.25),
+      y: clampY(placement === 'center' ? anchorPoint.y - pillH / 2 : smartY),
       width: pillW,
       height: pillH,
     };
