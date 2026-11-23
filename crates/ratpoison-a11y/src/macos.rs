@@ -38,6 +38,7 @@ type AXUIElementRef = *const c_void;
 type AXValueRef = *const c_void;
 type AXError = i32;
 type CFIndex = isize;
+type CFTypeID = usize;
 type CFStringEncoding = u32;
 type CFNumberType = CFIndex;
 type CGWindowListOption = u32;
@@ -78,6 +79,10 @@ extern "C" {
     static kCFTypeDictionaryValueCallBacks: c_void;
 
     fn CFRelease(cf: CFTypeRef);
+    fn CFGetTypeID(cf: CFTypeRef) -> CFTypeID;
+    fn CFStringGetTypeID() -> CFTypeID;
+    fn CFArrayGetTypeID() -> CFTypeID;
+    fn CFNumberGetTypeID() -> CFTypeID;
     fn CFStringCreateWithCString(
         alloc: CFAllocatorRef,
         c_str: *const c_char,
@@ -147,6 +152,8 @@ extern "C" {
         element: AXUIElementRef,
         names: *mut CFArrayRef,
     ) -> AXError;
+    fn AXUIElementGetTypeID() -> CFTypeID;
+    fn AXValueGetTypeID() -> CFTypeID;
     fn AXValueGetValue(
         value: AXValueRef,
         the_type: u32,
@@ -190,7 +197,7 @@ fn cfstring_from_str(s: &str) -> Option<ScopedCFRef> {
 }
 
 unsafe fn cfstring_to_string(cf_str: CFStringRef) -> Option<String> {
-    if cf_str.is_null() {
+    if cf_str.is_null() || CFGetTypeID(cf_str) != CFStringGetTypeID() {
         return None;
     }
     let len = CFStringGetLength(cf_str);
@@ -217,7 +224,7 @@ unsafe fn cfdict_get_i32(dict: CFDictionaryRef, key: CFStringRef) -> Option<i32>
         return None;
     }
     let val = CFDictionaryGetValue(dict, key);
-    if val.is_null() {
+    if val.is_null() || CFGetTypeID(val) != CFNumberGetTypeID() {
         return None;
     }
     let mut out: i32 = 0;
@@ -609,6 +616,15 @@ impl MacOSAccessibilityProvider {
         }
     }
 
+    fn copy_array_attr(element: AXUIElementRef, attr_name: &str) -> Option<ScopedCFRef> {
+        let val = Self::copy_attr(element, attr_name)?;
+        if unsafe { CFGetTypeID(val.as_ptr()) == CFArrayGetTypeID() } {
+            Some(val)
+        } else {
+            None
+        }
+    }
+
     /// Extracts the most descriptive user-visible label for an accessibility element.
     /// Checks `AXTitle` -> `AXDescription` -> `AXValue` (string) -> `AXHelp`, and falls back
     /// to inspecting up to 4 immediate child elements (e.g. browser `AXLink`/`AXButton` wrapping
@@ -636,11 +652,13 @@ impl MacOSAccessibilityProvider {
             }
         }
 
-        if let Some(children_arr) = Self::copy_attr(element, "AXChildren") {
+        if let Some(children_arr) = Self::copy_array_attr(element, "AXChildren") {
             let count = unsafe { CFArrayGetCount(children_arr.as_ptr()) }.min(4);
             for i in 0..count {
                 let child = unsafe { CFArrayGetValueAtIndex(children_arr.as_ptr(), i) };
-                if child.is_null() {
+                if child.is_null()
+                    || unsafe { CFGetTypeID(child) != AXUIElementGetTypeID() }
+                {
                     continue;
                 }
                 for attr in ["AXTitle", "AXValue", "AXDescription"] {
@@ -662,6 +680,13 @@ impl MacOSAccessibilityProvider {
     fn copy_bounds(element: AXUIElementRef) -> Option<LogicalRect> {
         let pos_ref = Self::copy_attr(element, "AXPosition")?;
         let size_ref = Self::copy_attr(element, "AXSize")?;
+        let ax_val_type = unsafe { AXValueGetTypeID() };
+        if unsafe {
+            CFGetTypeID(pos_ref.as_ptr()) != ax_val_type
+                || CFGetTypeID(size_ref.as_ptr()) != ax_val_type
+        } {
+            return None;
+        }
 
         let mut pt = CGPoint::default();
         let mut sz = CGSize::default();
@@ -924,11 +949,11 @@ impl AccessibilityProvider for MacOSAccessibilityProvider {
                 // Skip expanding children on leaf controls (`AXButton`, `AXStaticText`, `AXMenuBarItem`, etc.).
                 if depth < budget.max_depth && !should_skip_ax_children(&ax_role) {
                     let children_ref = if should_prefer_visible_children(&ax_role) {
-                        Self::copy_attr(elem_ptr, "AXVisibleChildren")
+                        Self::copy_array_attr(elem_ptr, "AXVisibleChildren")
                             .filter(|arr| unsafe { CFArrayGetCount(arr.as_ptr()) } > 0)
-                            .or_else(|| Self::copy_attr(elem_ptr, "AXChildren"))
+                            .or_else(|| Self::copy_array_attr(elem_ptr, "AXChildren"))
                     } else {
-                        Self::copy_attr(elem_ptr, "AXChildren")
+                        Self::copy_array_attr(elem_ptr, "AXChildren")
                     };
 
                     if let Some(children_arr) = children_ref {
@@ -960,5 +985,23 @@ impl AccessibilityProvider for MacOSAccessibilityProvider {
             elapsed: start.elapsed(),
             truncated_by_budget,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cfstring_to_string_safely_rejects_non_string_cf_types() {
+        let res = unsafe { cfstring_to_string(kCFBooleanTrue) };
+        assert_eq!(res, None);
+    }
+
+    #[test]
+    fn cfstring_roundtrip_works_for_valid_cfstring() {
+        let s = cfstring_from_str("Pull requests").expect("valid CFString");
+        let back = unsafe { cfstring_to_string(s.as_ptr()) };
+        assert_eq!(back.as_deref(), Some("Pull requests"));
     }
 }
