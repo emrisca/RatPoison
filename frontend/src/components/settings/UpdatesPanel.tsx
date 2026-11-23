@@ -85,7 +85,7 @@ export function UpdatesPanel() {
 
   return (
     <div className="rp-panel-stack">
-      <div className="rp-status-card rp-status-card--updates">
+      <div className="rp-status-card rp-status-card--updates rp-status-card--stacked">
         <div className="rp-status-icon">
           <Sparkles size={22} />
         </div>
@@ -145,42 +145,49 @@ export function UpdatesPanel() {
           )}
 
           <div className="rp-update-meta">
-            <span>Signed in-app updater · github.com/emrisca/RatPoison</span>
-            {publishedLabel && <span>· Published {publishedLabel}</span>}
+            <span>Signed in-app updater</span>
+            <span aria-hidden="true">·</span>
+            <span>github.com/emrisca/RatPoison</span>
+            {publishedLabel && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>Published {publishedLabel}</span>
+              </>
+            )}
           </div>
-        </div>
 
-        <div className="rp-status-actions">
-          {updateAvailable && (
+          <div className="rp-status-actions">
+            {updateAvailable && (
+              <button
+                type="button"
+                className="rp-btn rp-btn--primary"
+                disabled={isInstalling}
+                onClick={() => void installUpdate()}
+                title={`Download, verify, install v${latestVersion}, and restart RatPoison`}
+              >
+                <Download size={14} />
+                {isInstalling ? 'Installing…' : `Install & Restart v${latestVersion}`}
+              </button>
+            )}
             <button
               type="button"
-              className="rp-btn rp-btn--primary"
-              disabled={isInstalling}
-              onClick={() => void installUpdate()}
-              title={`Download, verify, install v${latestVersion}, and restart RatPoison`}
+              className={`rp-btn ${updateAvailable ? 'rp-btn--secondary' : 'rp-btn--primary'}`}
+              disabled={isChecking || isInstalling}
+              onClick={() => void checkForUpdates()}
             >
-              <Download size={14} />
-              {isInstalling ? 'Installing…' : `Install & Restart v${latestVersion}`}
+              <RefreshCw size={14} className={isChecking ? 'rp-spin' : undefined} />
+              {isChecking ? 'Checking…' : 'Check for Updates'}
             </button>
-          )}
-          <button
-            type="button"
-            className={`rp-btn ${updateAvailable ? 'rp-btn--secondary' : 'rp-btn--primary'}`}
-            disabled={isChecking || isInstalling}
-            onClick={() => void checkForUpdates()}
-          >
-            <RefreshCw size={14} className={isChecking ? 'rp-spin' : undefined} />
-            {isChecking ? 'Checking…' : 'Check for Updates'}
-          </button>
-          <button
-            type="button"
-            className="rp-btn rp-btn--secondary"
-            onClick={() => void openExternalUrl(releaseUrl)}
-            title="View release history on GitHub"
-          >
-            <ExternalLink size={14} />
-            Releases
-          </button>
+            <button
+              type="button"
+              className="rp-btn rp-btn--secondary"
+              onClick={() => void openExternalUrl(releaseUrl)}
+              title="View release history on GitHub"
+            >
+              <ExternalLink size={14} />
+              Releases
+            </button>
+          </div>
         </div>
       </div>
 

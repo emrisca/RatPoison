@@ -984,6 +984,7 @@
 .rp-status-card {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 14px;
   padding: 16px 18px;
   border-radius: var(--rp-radius-md);
@@ -994,6 +995,11 @@
 
 .rp-status-card--updates {
   border-color: var(--rp-border-subtle);
+}
+
+.rp-status-card--stacked {
+  align-items: flex-start;
+  flex-wrap: nowrap;
 }
 
 .rp-status-icon {
@@ -1010,7 +1016,12 @@
 }
 
 .rp-status-body {
-  flex: 1;
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.rp-status-card--stacked .rp-status-body {
+  flex: 1 1 auto;
 }
 
 .rp-status-headline {
@@ -1282,7 +1293,11 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  flex-shrink: 0;
+  max-width: 100%;
+}
+
+.rp-status-card--stacked .rp-status-actions {
+  margin-top: 12px;
 }
 
 .rp-update-meta {
