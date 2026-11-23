@@ -1,4 +1,4 @@
-name: Release & Notarize RatPoison
+name: Release RatPoison
 
 on:
   push:
@@ -7,28 +7,41 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to build and sign (e.g. v0.1.0 or v0.2.0-beta.1)"
+        description: "Release tag to publish (e.g. v0.1.0)"
         required: true
+        default: "v0.1.0"
         type: string
 
 permissions:
   contents: write
-  id-token: write
-
-env:
-  CARGO_TERM_COLOR: always
-  TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
 jobs:
-  verify-crates:
-    name: Verify Workspace Crates & License Tests
+  verify:
+    name: Verify Workspace & Frontend
     runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.release_tag.outputs.tag }}
+      prerelease: ${{ steps.release_tag.outputs.prerelease }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Linux system dependencies
+      - name: Resolve release tag
+        id: release_tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          if [[ "${TAG}" == *"-"* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Linux Tauri system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -36,307 +49,144 @@ jobs:
             libappindicator3-dev \
             librsvg2-dev \
             patchelf \
+            libssl-dev
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            src-tauri -> src-tauri/target
+
+      - name: Build & typecheck frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Run Rust workspace & Tauri tests
+        run: |
+          cargo test --workspace
+          cargo test --manifest-path src-tauri/Cargo.toml --features custom-protocol
+
+      - name: Prepare GitHub draft release (avoids matrix race)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release_tag.outputs.tag }}
+          PRERELEASE: ${{ steps.release_tag.outputs.prerelease }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            PRERELEASE_FLAG=""
+            if [ "$PRERELEASE" = "true" ]; then
+              PRERELEASE_FLAG="--prerelease"
+            fi
+            gh release create "$TAG" \
+              --draft \
+              $PRERELEASE_FLAG \
+              --title "RatPoison ${TAG}" \
+              --generate-notes
+          fi
+
+  build-tauri:
+    name: Build Tauri Bundle (${{ matrix.platform }})
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target universal-apple-darwin
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            args: ""
+            rust_targets: x86_64-unknown-linux-gnu
+          - platform: windows-latest
+            args: ""
+            rust_targets: x86_64-pc-windows-msvc
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux Tauri bundling dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
             libxdo-dev \
             libxtst-dev \
             libudev-dev \
             libinput-dev \
             libatspi2.0-dev
 
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
-      - name: Cache Cargo registry & target
-        uses: Swatinem/rust-cache@v2
-
-      - name: Run RatPoison licensing & updater tests
-        run: cargo test -p ratpoison-license --all-targets
-
-  build-macos:
-    name: Build, Sign & Notarize macOS Universal (aarch64 + x86_64)
-    needs: verify-crates
-    runs-on: macos-14
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
 
-      - name: Setup Rust stable with Apple Silicon & Intel targets
+      - name: Setup Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: ${{ matrix.rust_targets }}
 
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
-
-      - name: Import Apple Developer ID Application Certificate into ephemeral keychain
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          if [ -n "$APPLE_CERTIFICATE" ]; then
-            KEYCHAIN_PATH="$RUNNER_TEMP/ratpoison-signing.keychain-db"
-            echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
-            security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-            security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-            security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-            security import "$RUNNER_TEMP/certificate.p12" \
-              -P "$APPLE_CERTIFICATE_PASSWORD" \
-              -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-            security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-            security list-keychain -d user -s "$KEYCHAIN_PATH"
-            rm -f "$RUNNER_TEMP/certificate.p12"
-          fi
+        with:
+          workspaces: |
+            . -> target
+            src-tauri -> src-tauri/target
 
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
 
-      - name: Build Tauri Universal macOS Bundle (.app + .dmg + .app.tar.gz + .sig)
+      - name: Build & upload Tauri bundles to draft release
+        uses: tauri-apps/tauri-action@v0
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NO_STRIP: "true"
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: |
-          cargo install tauri-cli --version "^2.0.0" --locked
-          cargo tauri build --target universal-apple-darwin
-
-      - name: Notarize with xcrun notarytool & staple ticket via xcrun stapler
-        env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          DMG_PATH=$(find target/universal-apple-darwin/release/bundle/dmg -name "*.dmg" | head -n 1)
-          APP_PATH=$(find target/universal-apple-darwin/release/bundle/macos -name "*.app" -maxdepth 1 | head -n 1)
-          if [ -n "$APPLE_ID" ] && [ -n "$DMG_PATH" ]; then
-            xcrun notarytool submit "$DMG_PATH" \
-              --apple-id "$APPLE_ID" \
-              --password "$APPLE_PASSWORD" \
-              --team-id "$APPLE_TEAM_ID" \
-              --wait
-            xcrun stapler staple "$DMG_PATH"
-            xcrun stapler staple "$APP_PATH"
-            spctl --assess --type open --context context:primary-signature --verbose "$DMG_PATH"
-          fi
-
-      - name: Generate Sparkle Ed25519 appcast signature metadata
-        env:
-          SPARKLE_ED25519_PRIVATE_KEY: ${{ secrets.SPARKLE_ED25519_PRIVATE_KEY }}
-        run: |
-          mkdir -p dist/macos
-          cp target/universal-apple-darwin/release/bundle/dmg/*.dmg dist/macos/ || true
-          cp target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz* dist/macos/ || true
-
-      - name: Upload macOS release artifacts
-        uses: actions/upload-artifact@v4
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          name: artifacts-macos-universal
-          path: dist/macos/*
-
-  build-windows:
-    name: Build & Authenticode Sign Windows (x86_64-pc-windows-msvc)
-    needs: verify-crates
-    runs-on: windows-2022
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Setup Rust stable (x86_64-pc-windows-msvc)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
-
-      - name: Cache Cargo dependencies
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Build Tauri Windows Bundle (.msi, .exe NSIS, updater .zip + .sig)
-        run: |
-          cargo install tauri-cli --version "^2.0.0" --locked
-          cargo tauri build --target x86_64-pc-windows-msvc
-
-      - name: Authenticode Sign Binaries with signtool / Azure Trusted Signing
-        shell: pwsh
-        env:
-          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
-          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
-          TIMESTAMP_SERVER_URL: "http://timestamp.digicert.com"
-        run: |
-          New-Item -ItemType Directory -Force -Path dist/windows | Out-Null
-          Get-ChildItem -Path target/x86_64-pc-windows-msvc/release/bundle -Recurse -Include *.msi,*.exe,*.zip,*.sig | Copy-Item -Destination dist/windows/ -Force
-          if ($env:WINDOWS_PFX_BASE64) {
-            $pfxPath = Join-Path $env:RUNNER_TEMP "windows-signing.pfx"
-            [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_PFX_BASE64))
-            Get-ChildItem -Path dist/windows -Include *.msi,*.exe -Recurse | ForEach-Object {
-              signtool.exe sign /f $pfxPath /p $env:WINDOWS_PFX_PASSWORD /fd SHA256 /tr $env:TIMESTAMP_SERVER_URL /td SHA256 $_.FullName
-              signtool.exe verify /pa /v $_.FullName
-            }
-            Remove-Item -Force $pfxPath
-          }
-
-      - name: Upload Windows release artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: artifacts-windows-x86_64
-          path: dist/windows/*
-
-  build-linux:
-    name: Build Linux (.AppImage, .deb, Flatpak bundle)
-    needs: verify-crates
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Linux Tauri & Flatpak build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libxdo-dev \
-            libxtst-dev \
-            libudev-dev \
-            libinput-dev \
-            libatspi2.0-dev \
-            flatpak \
-            flatpak-builder \
-            elfutils
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Setup Rust stable (x86_64-unknown-linux-gnu)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-gnu
-
-      - name: Cache Cargo dependencies
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Build Tauri Linux Bundles (.AppImage, .deb, .AppImage.tar.gz + .sig)
-        run: |
-          cargo install tauri-cli --version "^2.0.0" --locked
-          cargo tauri build --target x86_64-unknown-linux-gnu
-          mkdir -p dist/linux
-          find target/x86_64-unknown-linux-gnu/release/bundle -type f \( -name "*.AppImage*" -o -name "*.deb" -o -name "*.sig" \) -exec cp {} dist/linux/ \;
-
-      - name: Build Linux Flatpak OSTree repo & single-file .flatpak bundle
-        run: |
-          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-          if [ -f "packaging/flatpak/io.github.emrisca.RatPoison.yml" ]; then
-            flatpak-builder --user --install-deps-from=flathub --force-clean --repo=flatpak-repo build-flatpak packaging/flatpak/io.github.emrisca.RatPoison.yml
-            flatpak build-bundle flatpak-repo dist/linux/RatPoison-x86_64.flatpak io.github.emrisca.RatPoison
-          fi
-
-      - name: Upload Linux release artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: artifacts-linux-x86_64
-          path: dist/linux/*
+          projectPath: src-tauri
+          tagName: ${{ needs.verify.outputs.tag }}
+          releaseName: "RatPoison ${{ needs.verify.outputs.tag }}"
+          releaseDraft: true
+          prerelease: ${{ needs.verify.outputs.prerelease == 'true' }}
+          args: ${{ matrix.args }}
 
   publish-release:
-    name: GPG Sign Checksums, Generate latest.json & Publish Release
-    needs:
-      - build-macos
-      - build-windows
-      - build-linux
+    name: Publish GitHub Release
+    needs: [verify, build-tauri]
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download all platform artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: release-assets
-          merge-multiple: true
-
-      - name: Generate SHA256SUMS.txt and GPG detached signature (SHA256SUMS.txt.asc)
+      - name: Publish release
         env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.verify.outputs.tag }}
         run: |
-          cd release-assets
-          sha256sum * > SHA256SUMS.txt
-          if [ -n "$GPG_PRIVATE_KEY" ]; then
-            echo "$GPG_PRIVATE_KEY" | gpg --batch --import
-            gpg --batch --yes --pinentry-mode loopback \
-              --passphrase "$GPG_PASSPHRASE" \
-              --detach-sign --armor \
-              --output SHA256SUMS.txt.asc \
-              SHA256SUMS.txt
-          fi
-
-      - name: Assemble Tauri v2 Updater latest.json Manifest
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-          REPO_SLUG: ${{ github.repository }}
-        run: |
-          cd release-assets
-          VERSION="${RELEASE_TAG#v}"
-          CHANNEL="stable"
-          if [[ "$VERSION" == *"-"* ]]; then
-            CHANNEL="beta"
-          fi
-          PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          MAC_SIG=$(cat *.app.tar.gz.sig 2>/dev/null || echo "UNSIGNED_CI_BUILD")
-          WIN_SIG=$(cat *.msi.zip.sig *.nsis.zip.sig 2>/dev/null | head -n 1 || echo "UNSIGNED_CI_BUILD")
-          LIN_SIG=$(cat *.AppImage.tar.gz.sig 2>/dev/null || echo "UNSIGNED_CI_BUILD")
-          cat <<EOF > latest.json
-          {
-            "version": "${VERSION}",
-            "notes": "RatPoison ${RELEASE_TAG} automated cross-platform release.",
-            "pub_date": "${PUB_DATE}",
-            "channel": "${CHANNEL}",
-            "platforms": {
-              "darwin-aarch64": {
-                "signature": "${MAC_SIG}",
-                "url": "https://github.com/${REPO_SLUG}/releases/download/${RELEASE_TAG}/RatPoison_universal.app.tar.gz"
-              },
-              "darwin-x86_64": {
-                "signature": "${MAC_SIG}",
-                "url": "https://github.com/${REPO_SLUG}/releases/download/${RELEASE_TAG}/RatPoison_universal.app.tar.gz"
-              },
-              "windows-x86_64": {
-                "signature": "${WIN_SIG}",
-                "url": "https://github.com/${REPO_SLUG}/releases/download/${RELEASE_TAG}/RatPoison_x64_en-US.msi.zip"
-              },
-              "linux-x86_64": {
-                "signature": "${LIN_SIG}",
-                "url": "https://github.com/${REPO_SLUG}/releases/download/${RELEASE_TAG}/RatPoison_amd64.AppImage.tar.gz"
-              }
-            }
-          }
-          EOF
-
-      - name: Publish GitHub Release with Signed Artifacts & latest.json
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: "RatPoison ${{ github.ref_name }}"
-          generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          files: |
-            release-assets/*
+          gh release edit "$TAG" --draft=false
