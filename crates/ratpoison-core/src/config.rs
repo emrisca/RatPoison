@@ -24,6 +24,9 @@ pub struct LabelModeConfig {
     /// Return to `Normal` mode immediately after activating a matched badge.
     #[serde(default = "default_true")]
     pub exit_after_action: bool,
+    /// Open Label Mode directly in Spotlight text search instead of Compact Keycaps (`/` still toggles).
+    #[serde(default)]
+    pub start_in_search_mode: bool,
     /// Preserves unknown/future keys during config load/save round-trips.
     #[serde(flatten, default)]
     pub unknown_fields: BTreeMap<String, serde_json::Value>,
@@ -43,6 +46,7 @@ impl Default for LabelModeConfig {
             case_sensitive: false,
             max_badges: default_max_badges(),
             exit_after_action: true,
+            start_in_search_mode: false,
             unknown_fields: BTreeMap::new(),
         }
     }

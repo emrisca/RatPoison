@@ -84,9 +84,10 @@ impl HookController {
         }
     }
 
-    pub fn sync_engine_state(&self, mode: EngineMode, dragging: bool) {
+    pub fn sync_engine_state(&self, mode: EngineMode, dragging: bool, label_search_active: bool) {
         if let Ok(mut guard) = self.router.lock() {
             guard.sync_engine_state(mode, dragging);
+            guard.sync_label_search(label_search_active);
         }
     }
 
@@ -212,22 +213,22 @@ fn spawn_hook_worker(
                             }
                         };
                         let _ = rt.dispatch_event(event, Some(&app_handle));
-                        let mode = rt.engine.mode();
-                        let dragging = rt.engine.snapshot().active_modifiers.dragging;
+                        let snap = rt.engine.snapshot();
                         drop(rt);
                         if let Ok(mut r) = router.lock() {
-                            r.sync_engine_state(mode, dragging);
+                            r.sync_engine_state(snap.mode, snap.active_modifiers.dragging);
+                            r.sync_label_search(snap.label_search_active);
                         }
                     }
                 }
                 HookAction::ToggleLabelMode => {
                     if let Ok(mut rt) = runtime.lock() {
                         let _ = rt.dispatch_event(EngineEvent::ActivateLabelMode, Some(&app_handle));
-                        let mode = rt.engine.mode();
-                        let dragging = rt.engine.snapshot().active_modifiers.dragging;
+                        let snap = rt.engine.snapshot();
                         drop(rt);
                         if let Ok(mut r) = router.lock() {
-                            r.sync_engine_state(mode, dragging);
+                            r.sync_engine_state(snap.mode, snap.active_modifiers.dragging);
+                            r.sync_label_search(snap.label_search_active);
                         }
                     }
                 }
@@ -237,11 +238,11 @@ fn spawn_hook_worker(
                             EngineEvent::ActivateFreeMode { preset_id: None },
                             Some(&app_handle),
                         );
-                        let mode = rt.engine.mode();
-                        let dragging = rt.engine.snapshot().active_modifiers.dragging;
+                        let snap = rt.engine.snapshot();
                         drop(rt);
                         if let Ok(mut r) = router.lock() {
-                            r.sync_engine_state(mode, dragging);
+                            r.sync_engine_state(snap.mode, snap.active_modifiers.dragging);
+                            r.sync_label_search(snap.label_search_active);
                         }
                     }
                 }
@@ -273,11 +274,11 @@ fn spawn_hook_worker(
                                 Some(&app_handle),
                             );
                         }
-                        let mode = rt.engine.mode();
-                        let dragging = rt.engine.snapshot().active_modifiers.dragging;
+                        let snap = rt.engine.snapshot();
                         drop(rt);
                         if let Ok(mut r) = router.lock() {
-                            r.sync_engine_state(mode, dragging);
+                            r.sync_engine_state(snap.mode, snap.active_modifiers.dragging);
+                            r.sync_label_search(snap.label_search_active);
                         }
                     }
                 }
@@ -525,11 +526,10 @@ fn toggle_overlay_mode(
         _ => EngineEvent::ExitToNormal,
     };
     let payload = rt.dispatch_event(event, Some(&app));
-    let active_mode = rt.engine.mode();
-    let dragging = rt.engine.snapshot().active_modifiers.dragging;
+    let snap = rt.engine.snapshot();
     drop(rt);
     if let Ok(ctrl) = hook.0.lock() {
-        ctrl.sync_engine_state(active_mode, dragging);
+        ctrl.sync_engine_state(snap.mode, snap.active_modifiers.dragging, snap.label_search_active);
     }
     Ok(payload)
 }
@@ -620,12 +620,11 @@ pub fn run() {
                                     }
                                 };
                                 guard.dispatch_event(ev, Some(app_handle));
-                                let mode = guard.engine.mode();
-                                let dragging = guard.engine.snapshot().active_modifiers.dragging;
+                                let snap = guard.engine.snapshot();
                                 drop(guard);
                                 if let Some(hk) = app_handle.try_state::<SharedHook>() {
                                     if let Ok(ctrl) = hk.0.lock() {
-                                        ctrl.sync_engine_state(mode, dragging);
+                                        ctrl.sync_engine_state(snap.mode, snap.active_modifiers.dragging, snap.label_search_active);
                                     }
                                 }
                             }
@@ -638,12 +637,11 @@ pub fn run() {
                                     EngineEvent::ActivateLabelMode,
                                     Some(app_handle),
                                 );
-                                let mode = guard.engine.mode();
-                                let dragging = guard.engine.snapshot().active_modifiers.dragging;
+                                let snap = guard.engine.snapshot();
                                 drop(guard);
                                 if let Some(hk) = app_handle.try_state::<SharedHook>() {
                                     if let Ok(ctrl) = hk.0.lock() {
-                                        ctrl.sync_engine_state(mode, dragging);
+                                        ctrl.sync_engine_state(snap.mode, snap.active_modifiers.dragging, snap.label_search_active);
                                     }
                                 }
                             }
@@ -656,12 +654,11 @@ pub fn run() {
                                     EngineEvent::ActivateFreeMode { preset_id: None },
                                     Some(app_handle),
                                 );
-                                let mode = guard.engine.mode();
-                                let dragging = guard.engine.snapshot().active_modifiers.dragging;
+                                let snap = guard.engine.snapshot();
                                 drop(guard);
                                 if let Some(hk) = app_handle.try_state::<SharedHook>() {
                                     if let Ok(ctrl) = hk.0.lock() {
-                                        ctrl.sync_engine_state(mode, dragging);
+                                        ctrl.sync_engine_state(snap.mode, snap.active_modifiers.dragging, snap.label_search_active);
                                     }
                                 }
                             }

@@ -92,6 +92,9 @@ export interface OverlayStatePayload {
   gridCells: GridCell[];
   subgrid: SubgridState | null;
   labelBadges: LabelBadge[];
+  labelSearchActive?: boolean;
+  labelSearchQuery?: string;
+  labelSearchSelectedIndex?: number;
   freeMode: FreeModeState | null;
   cursorPreview: LogicalPoint | null;
   activeModifiers: string[];
@@ -157,6 +160,7 @@ export interface RatPoisonConfig {
     includeDock: boolean;
     showElementRoleHint: boolean;
     badgePlacement: BadgePlacement;
+    startInSearchMode: boolean;
   };
   keybindings: {
     toggleGrid: string;

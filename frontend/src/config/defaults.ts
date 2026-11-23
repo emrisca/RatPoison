@@ -111,6 +111,7 @@ const BASE_DEFAULT_CONFIG: Omit<RatPoisonConfig, 'keybindings'> = {
     includeDock: true,
     showElementRoleHint: false,
     badgePlacement: 'smart',
+    startInSearchMode: false,
   },
   appearance: {
     theme: 'system',
@@ -262,6 +263,7 @@ export const SETTING_REGISTRY: SettingDescriptor[] = [
   { path: 'labelMode.includeMenubar', tab: 'labelMode', section: 'Scope', label: 'Include system menu bar', description: 'Scan top menu bar items and status extras.', keywords: ['menubar', 'top bar', 'macos'] },
   { path: 'labelMode.includeDock', tab: 'labelMode', section: 'Scope', label: 'Include Dock / Taskbar', description: 'Scan pinned and active Dock or Taskbar icons.', keywords: ['dock', 'taskbar', 'panel'] },
   { path: 'labelMode.showElementRoleHint', tab: 'labelMode', section: 'Badge Layout', label: 'Show compact role tag', description: 'Append subtle role micro-tag (BTN, LNK, TXT) next to matched badges.', keywords: ['role', 'button', 'link', 'hint'] },
+  { path: 'labelMode.startInSearchMode', tab: 'labelMode', section: 'Spotlight Search', label: 'Start in Spotlight text search', description: 'Open Label Mode directly in Shortcat-style text search instead of keycaps. Press / anytime in Label Mode to switch.', keywords: ['search', 'spotlight', 'shortcat', 'filter', 'text'] },
 
   // Keybindings
   { path: 'keybindings.toggleGrid', tab: 'keybindings', section: 'Mode Activators', label: 'Toggle Grid Mode', description: 'Global shortcut to activate or dismiss the NxM Grid overlay.', keywords: ['hotkey', 'shortcut', 'grid', 'trigger'] },

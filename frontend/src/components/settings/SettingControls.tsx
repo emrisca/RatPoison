@@ -356,6 +356,7 @@ export function SettingControlByPath({
       case 'labelMode.includeMenubar':
       case 'labelMode.includeDock':
       case 'labelMode.showElementRoleHint':
+      case 'labelMode.startInSearchMode':
         return <ToggleControl path={path} />;
       case 'labelMode.charset':
         return <TextControl path={path} mono />;

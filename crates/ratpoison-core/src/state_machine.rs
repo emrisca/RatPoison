@@ -156,6 +156,12 @@ pub struct OverlaySnapshot {
     pub subgrid_cells: Vec<GridCell>,
     pub label_badges: Vec<LabelBadge>,
     pub typed_prefix: String,
+    #[serde(default)]
+    pub label_search_active: bool,
+    #[serde(default)]
+    pub label_search_query: String,
+    #[serde(default)]
+    pub label_search_selected_index: usize,
     pub cursor_preview: Option<LogicalPoint>,
     pub active_modifiers: ActiveModifiers,
     pub active_preset_id: Option<String>,
@@ -278,6 +284,12 @@ pub enum EngineEvent {
     FreeModeTick { dt_ms: u32 },
     /// Deliver discovered accessibility targets from `ratpoison-a11y` into `LabelMode`.
     AccessibilityLabelsLoaded { badges: Vec<LabelBadge> },
+    /// Toggle Spotlight text search on/off while in `LabelMode` (`/`).
+    ToggleLabelSearch,
+    /// Move the active selection among Spotlight text search matches (`Tab`/`Shift+Tab`/`↑`/`↓`).
+    LabelSearchNavigate { delta: isize },
+    /// Click / activate the currently selected Spotlight text search match (`Enter`).
+    LabelSearchConfirm,
     /// Update external cursor position observed by the OS/HID layer while in `Normal` mode.
     SyncCursor { logical: LogicalPoint },
     /// Hot-plug or DPI layout update.
@@ -385,6 +397,9 @@ pub struct CoreEngine {
     subgrid: Option<Grid>,
     label_badges: Vec<LabelBadge>,
     typed_prefix: String,
+    label_search_active: bool,
+    label_search_query: String,
+    label_search_selected_index: usize,
     cursor_logical: LogicalPoint,
     last_nudge_step: NudgeStep,
     dragging: bool,
@@ -412,6 +427,9 @@ impl CoreEngine {
             subgrid: None,
             label_badges: Vec::new(),
             typed_prefix: String::new(),
+            label_search_active: false,
+            label_search_query: String::new(),
+            label_search_selected_index: 0,
             cursor_logical,
             last_nudge_step: NudgeStep::Normal,
             dragging: false,
@@ -471,6 +489,21 @@ impl CoreEngine {
         } else {
             Vec::new()
         };
+        let label_search_active = self.mode == EngineMode::LabelMode && self.label_search_active;
+        let label_search_selected_index = if label_search_active && !label_badges.is_empty() {
+            self.label_search_selected_index.min(label_badges.len() - 1)
+        } else {
+            0
+        };
+        let cursor_preview = if self.mode == EngineMode::Normal {
+            None
+        } else if label_search_active {
+            label_badges
+                .get(label_search_selected_index)
+                .map(|b| b.center)
+        } else {
+            Some(self.cursor_logical)
+        };
 
         OverlaySnapshot {
             mode: self.mode,
@@ -482,11 +515,14 @@ impl CoreEngine {
             subgrid_cells,
             label_badges,
             typed_prefix: self.typed_prefix.clone(),
-            cursor_preview: if self.mode == EngineMode::Normal {
-                None
+            label_search_active,
+            label_search_query: if label_search_active {
+                self.label_search_query.clone()
             } else {
-                Some(self.cursor_logical)
+                String::new()
             },
+            label_search_selected_index,
+            cursor_preview,
             active_modifiers: ActiveModifiers {
                 speed: self.free_runtime.active_speed(),
                 speed_keys_held: self.free_runtime.speed_stack.clone(),
@@ -555,6 +591,37 @@ impl CoreEngine {
             EngineEvent::AccessibilityLabelsLoaded { badges } => {
                 if self.mode == EngineMode::LabelMode {
                     self.load_accessibility_badges(badges);
+                }
+            }
+            EngineEvent::ToggleLabelSearch => {
+                if self.mode == EngineMode::LabelMode {
+                    self.label_search_active = !self.label_search_active;
+                    self.typed_prefix.clear();
+                    self.label_search_query.clear();
+                    self.label_search_selected_index = 0;
+                    effects.push(EngineEffect::ClearKeyBuffer);
+                }
+            }
+            EngineEvent::LabelSearchNavigate { delta } => {
+                if self.mode == EngineMode::LabelMode && self.label_search_active {
+                    let count = self.filtered_label_badges().len();
+                    if count > 0 {
+                        let current = self.label_search_selected_index.min(count - 1) as isize;
+                        let next = (current + delta).rem_euclid(count as isize) as usize;
+                        self.label_search_selected_index = next;
+                    } else {
+                        self.label_search_selected_index = 0;
+                    }
+                }
+            }
+            EngineEvent::LabelSearchConfirm => {
+                if self.mode == EngineMode::LabelMode && self.label_search_active {
+                    let matches = self.filtered_label_badges();
+                    if !matches.is_empty() {
+                        let idx = self.label_search_selected_index.min(matches.len() - 1);
+                        let chosen = matches[idx].clone();
+                        self.trigger_label_badge(chosen, &mut effects);
+                    }
                 }
             }
             EngineEvent::SyncCursor { logical } => {
@@ -768,6 +835,9 @@ impl CoreEngine {
         self.subgrid = None;
         self.label_badges.clear();
         self.typed_prefix.clear();
+        self.label_search_active = self.config.label_mode.start_in_search_mode;
+        self.label_search_query.clear();
+        self.label_search_selected_index = 0;
         self.free_runtime.reset();
         self.mode = EngineMode::LabelMode;
 
@@ -799,6 +869,9 @@ impl CoreEngine {
         self.subgrid = None;
         self.label_badges.clear();
         self.typed_prefix.clear();
+        self.label_search_active = false;
+        self.label_search_query.clear();
+        self.label_search_selected_index = 0;
         self.free_runtime.reset();
 
         effects.push(EngineEffect::ClearKeyBuffer);
@@ -918,7 +991,47 @@ impl CoreEngine {
         }
     }
 
+    fn trigger_label_badge(&mut self, badge: LabelBadge, effects: &mut Vec<EngineEffect>) {
+        self.typed_prefix.clear();
+        self.label_search_query.clear();
+        self.label_search_selected_index = 0;
+        effects.push(EngineEffect::ClearKeyBuffer);
+        self.move_cursor_to(badge.center, Some(&badge.monitor_id), effects);
+
+        if self.config.label_mode.auto_click {
+            if let Some((mid, phys)) = self.current_cursor_physical() {
+                effects.push(EngineEffect::Click {
+                    button: MouseButton::Left,
+                    count: 1,
+                    logical: self.cursor_logical,
+                    physical: phys,
+                    monitor_id: mid,
+                });
+            }
+        }
+
+        if self.config.label_mode.exit_after_action {
+            self.exit_to_normal(false, effects);
+        }
+    }
+
     fn handle_label_char(&mut self, ch: char, effects: &mut Vec<EngineEffect>) {
+        if !self.label_search_active && self.typed_prefix.is_empty() && ch == '/' {
+            self.label_search_active = true;
+            self.label_search_query.clear();
+            self.label_search_selected_index = 0;
+            effects.push(EngineEffect::ClearKeyBuffer);
+            return;
+        }
+
+        if self.label_search_active {
+            if !ch.is_control() && self.label_search_query.chars().count() < 80 {
+                self.label_search_query.push(ch);
+                self.label_search_selected_index = 0;
+            }
+            return;
+        }
+
         let case_sensitive = self.config.label_mode.case_sensitive;
         let mut candidate = self.typed_prefix.clone();
         candidate.push(ch);
@@ -949,25 +1062,7 @@ impl CoreEngine {
         };
 
         if let Some(badge) = trigger_badge {
-            self.typed_prefix.clear();
-            effects.push(EngineEffect::ClearKeyBuffer);
-            self.move_cursor_to(badge.center, Some(&badge.monitor_id), effects);
-
-            if self.config.label_mode.auto_click {
-                if let Some((mid, phys)) = self.current_cursor_physical() {
-                    effects.push(EngineEffect::Click {
-                        button: MouseButton::Left,
-                        count: 1,
-                        logical: self.cursor_logical,
-                        physical: phys,
-                        monitor_id: mid,
-                    });
-                }
-            }
-
-            if self.config.label_mode.exit_after_action {
-                self.exit_to_normal(false, effects);
-            }
+            self.trigger_label_badge(badge, effects);
         } else {
             self.typed_prefix = candidate;
         }
@@ -998,6 +1093,67 @@ impl CoreEngine {
     }
 
     fn filtered_label_badges(&self) -> Vec<LabelBadge> {
+        if self.label_search_active {
+            let query = self.label_search_query.trim().to_ascii_lowercase();
+            if query.is_empty() {
+                // Shortcat-style zero-clutter screen until the user types a query.
+                return Vec::new();
+            }
+            let tokens: Vec<&str> = query.split_whitespace().collect();
+            if tokens.is_empty() {
+                return Vec::new();
+            }
+
+            let mut scored: Vec<(u8, usize, i64, i64, LabelBadge)> = self
+                .label_badges
+                .iter()
+                .filter_map(|badge| {
+                    let title_lc = badge.title.to_ascii_lowercase();
+                    let role_lc = badge.role.to_ascii_lowercase();
+                    let all_in_title =
+                        !title_lc.is_empty() && tokens.iter().all(|t| title_lc.contains(t));
+                    let all_in_combined = tokens
+                        .iter()
+                        .all(|t| title_lc.contains(t) || role_lc.contains(t));
+
+                    if !all_in_combined {
+                        return None;
+                    }
+
+                    let rank: u8 = if title_lc == query {
+                        0
+                    } else if title_lc.starts_with(&query) {
+                        1
+                    } else if all_in_title
+                        && title_lc
+                            .split(|c: char| !c.is_alphanumeric())
+                            .any(|w| w.starts_with(tokens[0]))
+                    {
+                        2
+                    } else if all_in_title {
+                        3
+                    } else {
+                        4
+                    };
+
+                    Some((
+                        rank,
+                        title_lc.len(),
+                        (badge.rect.y * 10.0).round() as i64,
+                        (badge.rect.x * 10.0).round() as i64,
+                        badge.clone(),
+                    ))
+                })
+                .collect();
+
+            scored.sort_by_key(|(rank, title_len, y, x, _)| (*rank, *title_len, *y, *x));
+            return scored
+                .into_iter()
+                .take(24)
+                .map(|(_, _, _, _, badge)| badge)
+                .collect();
+        }
+
         if self.typed_prefix.is_empty() {
             return self.label_badges.clone();
         }
@@ -1011,6 +1167,18 @@ impl CoreEngine {
     }
 
     fn handle_backspace(&mut self, effects: &mut Vec<EngineEffect>) {
+        if self.mode == EngineMode::LabelMode && self.label_search_active {
+            if !self.label_search_query.is_empty() {
+                self.label_search_query.pop();
+                self.label_search_selected_index = 0;
+            } else {
+                // Pressing Backspace on an empty search bar returns to Compact Keycap Mode.
+                self.label_search_active = false;
+                self.label_search_selected_index = 0;
+            }
+            return;
+        }
+
         if !self.typed_prefix.is_empty() {
             self.typed_prefix.pop();
             return;
@@ -1965,5 +2133,105 @@ mod tests {
             Some("PRIMARY")
         );
         assert_eq!(back_out.snapshot.grid_dimensions(), (18, 26));
+    }
+
+    #[test]
+    fn label_mode_spotlight_search_filters_ranks_navigates_and_clicks() {
+        let mut engine = CoreEngine::new(RatPoisonConfig::default(), dual_mixed_dpi_layout());
+        engine.handle_event(EngineEvent::ActivateLabelMode);
+
+        let badges = vec![
+            LabelBadge {
+                id: "b1".into(),
+                label: "aa".into(),
+                role: "Link".into(),
+                title: "View all pull requests".into(),
+                rect: LogicalRect::new(100.0, 200.0, 140.0, 28.0),
+                center: LogicalPoint::new(170.0, 214.0),
+                monitor_id: "m1".into(),
+            },
+            LabelBadge {
+                id: "b2".into(),
+                label: "ab".into(),
+                role: "Link".into(),
+                title: "Pull requests".into(),
+                rect: LogicalRect::new(300.0, 80.0, 100.0, 28.0),
+                center: LogicalPoint::new(350.0, 94.0),
+                monitor_id: "m1".into(),
+            },
+            LabelBadge {
+                id: "b3".into(),
+                label: "ac".into(),
+                role: "Button".into(),
+                title: "Code".into(),
+                rect: LogicalRect::new(500.0, 120.0, 80.0, 32.0),
+                center: LogicalPoint::new(540.0, 136.0),
+                monitor_id: "m1".into(),
+            },
+        ];
+        engine.handle_event(EngineEvent::AccessibilityLabelsLoaded { badges });
+
+        // Starts in Compact Keycap Mode with all 3 badges visible.
+        let snap = engine.snapshot();
+        assert!(!snap.label_search_active);
+        assert_eq!(snap.label_badges.len(), 3);
+
+        // Press `/` to switch into Spotlight text search: zero clutter until user types.
+        let out = engine.handle_event(EngineEvent::KeyChar { ch: '/' });
+        assert!(out.snapshot.label_search_active);
+        assert!(out.snapshot.label_badges.is_empty());
+
+        // Type "pull": prefix match ("Pull requests") ranks ahead of substring ("View all pull requests").
+        for ch in "pull".chars() {
+            engine.handle_event(EngineEvent::KeyChar { ch });
+        }
+        let snap = engine.snapshot();
+        assert_eq!(snap.label_search_query, "pull");
+        assert_eq!(snap.label_badges.len(), 2);
+        assert_eq!(snap.label_badges[0].id, "b2");
+        assert_eq!(snap.label_badges[1].id, "b1");
+        assert_eq!(snap.label_search_selected_index, 0);
+
+        // Cycle forward and wrap around with Tab / ArrowDown.
+        let out = engine.handle_event(EngineEvent::LabelSearchNavigate { delta: 1 });
+        assert_eq!(out.snapshot.label_search_selected_index, 1);
+        let out = engine.handle_event(EngineEvent::LabelSearchNavigate { delta: 1 });
+        assert_eq!(out.snapshot.label_search_selected_index, 0);
+        let out = engine.handle_event(EngineEvent::LabelSearchNavigate { delta: -1 });
+        assert_eq!(out.snapshot.label_search_selected_index, 1);
+
+        // Confirm with Enter clicks b1 center (170, 214) and exits to Normal.
+        let out = engine.handle_event(EngineEvent::LabelSearchConfirm);
+        assert_eq!(out.snapshot.mode, EngineMode::Normal);
+        assert!(!out.snapshot.label_search_active);
+        assert!(out.effects.iter().any(|e| matches!(
+            e,
+            EngineEffect::Click { logical, .. }
+                if (logical.x - 170.0).abs() < 0.01 && (logical.y - 214.0).abs() < 0.01
+        )));
+    }
+
+    #[test]
+    fn label_mode_spotlight_backspace_steps_back_to_keycaps_and_start_in_search_config() {
+        let mut cfg = RatPoisonConfig::default();
+        cfg.label_mode.start_in_search_mode = true;
+        let mut engine = CoreEngine::new(cfg, dual_mixed_dpi_layout());
+
+        let out = engine.handle_event(EngineEvent::ActivateLabelMode);
+        assert_eq!(out.snapshot.mode, EngineMode::LabelMode);
+        assert!(out.snapshot.label_search_active);
+
+        engine.handle_event(EngineEvent::KeyChar { ch: 'a' });
+        assert_eq!(engine.snapshot().label_search_query, "a");
+
+        // First Backspace clears the query while staying in Spotlight search.
+        let out = engine.handle_event(EngineEvent::Backspace);
+        assert!(out.snapshot.label_search_active);
+        assert!(out.snapshot.label_search_query.is_empty());
+
+        // Second Backspace on empty query switches back to Compact Keycap Mode.
+        let out = engine.handle_event(EngineEvent::Backspace);
+        assert_eq!(out.snapshot.mode, EngineMode::LabelMode);
+        assert!(!out.snapshot.label_search_active);
     }
 }

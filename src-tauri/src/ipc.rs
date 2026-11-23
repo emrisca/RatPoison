@@ -129,6 +129,9 @@ pub struct OverlayStatePayloadDto {
     pub grid_cells: Vec<GridCellDto>,
     pub subgrid: Option<SubgridStateDto>,
     pub label_badges: Vec<LabelBadgeDto>,
+    pub label_search_active: bool,
+    pub label_search_query: String,
+    pub label_search_selected_index: usize,
     pub free_mode: Option<FreeModeStateDto>,
     pub cursor_preview: Option<LogicalPointDto>,
     pub active_modifiers: Vec<String>,
@@ -471,8 +474,13 @@ pub fn project_snapshot_to_overlay_payload(
     let label_badges: Vec<LabelBadgeDto> = snapshot
         .label_badges
         .iter()
-        .map(|badge| {
-            let (matched_prefix, exact_match) = matches_prefix(&badge.label, prefix, false);
+        .enumerate()
+        .map(|(idx, badge)| {
+            let (matched_prefix, exact_match) = if snapshot.label_search_active {
+                (true, idx == snapshot.label_search_selected_index)
+            } else {
+                matches_prefix(&badge.label, prefix, false)
+            };
             let rel_rect = to_window_relative_rect(badge.rect, origin);
             LabelBadgeDto {
                 id: badge.id.clone(),
@@ -553,6 +561,9 @@ pub fn project_snapshot_to_overlay_payload(
         grid_cells,
         subgrid,
         label_badges,
+        label_search_active: snapshot.label_search_active,
+        label_search_query: snapshot.label_search_query.clone(),
+        label_search_selected_index: snapshot.label_search_selected_index,
         free_mode,
         cursor_preview: snapshot
             .cursor_preview
@@ -618,7 +629,8 @@ pub fn default_frontend_config_json_for_os(os: &str) -> Value {
             "includeMenubar": true,
             "includeDock": true,
             "showElementRoleHint": false,
-            "badgePlacement": "smart"
+            "badgePlacement": "smart",
+            "startInSearchMode": false
         },
         "keybindings": kb,
         "appearance": {
@@ -958,6 +970,11 @@ impl ConfigStore {
             get_json_path(&self.raw_json, "labelMode.maxBadges").and_then(Value::as_u64)
         {
             core.label_mode.max_badges = max_b as usize;
+        }
+        if let Some(start_search) = get_json_path(&self.raw_json, "labelMode.startInSearchMode")
+            .and_then(Value::as_bool)
+        {
+            core.label_mode.start_in_search_mode = start_search;
         }
         // Keep the built-in `"standard"` preset in lockstep with live user settings so
         // `CoreEngine::activate_grid` never falls back to stale preset dimensions.

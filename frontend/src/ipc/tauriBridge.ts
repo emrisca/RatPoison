@@ -409,6 +409,9 @@ export function buildDemoOverlayState(
           }
         : null,
     labelBadges: mode === 'label' ? labelBadges : [],
+    labelSearchActive: false,
+    labelSearchQuery: '',
+    labelSearchSelectedIndex: 0,
     freeMode:
       mode === 'free'
         ? {

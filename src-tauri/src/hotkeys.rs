@@ -153,6 +153,7 @@ pub struct HookRouteConfig {
     pub open_settings: Option<KeyChord>,
     pub grid_case_sensitive: bool,
     pub subgrid_keys: String,
+    pub label_start_in_search_mode: bool,
     pub free_up: KeyCode,
     pub free_down: KeyCode,
     pub free_left: KeyCode,
@@ -196,6 +197,12 @@ impl HookRouteConfig {
             .unwrap_or("qweasdzxc")
             .to_ascii_lowercase();
 
+        let label_start_in_search_mode = cfg
+            .get("labelMode")
+            .and_then(|v| v.get("startInSearchMode"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+
         Self {
             toggle_grid: kb("toggleGrid", "Option+Space"),
             toggle_label_mode: kb("toggleLabelMode", "Option+Shift+Space"),
@@ -209,6 +216,7 @@ impl HookRouteConfig {
             open_settings: kb("openSettings", "Cmd+,"),
             grid_case_sensitive,
             subgrid_keys,
+            label_start_in_search_mode,
             free_up: fm_key("keyUp", KeyCode::from_ascii_upper(b'I')),
             free_down: fm_key("keyDown", KeyCode::from_ascii_upper(b'K')),
             free_left: fm_key("keyLeft", KeyCode::from_ascii_upper(b'J')),
@@ -236,6 +244,7 @@ pub struct HookRouter {
     config: HookRouteConfig,
     mode: EngineMode,
     dragging: bool,
+    label_search_active: bool,
     scroll_held: bool,
     swallowed_keys: HashSet<KeyCode>,
     active_free_directions: HashSet<Direction>,
@@ -247,6 +256,7 @@ impl HookRouter {
             config,
             mode: EngineMode::Normal,
             dragging: false,
+            label_search_active: false,
             scroll_held: false,
             swallowed_keys: HashSet::new(),
             active_free_directions: HashSet::new(),
@@ -264,6 +274,13 @@ impl HookRouter {
             self.scroll_held = false;
             self.active_free_directions.clear();
         }
+        if mode != EngineMode::LabelMode {
+            self.label_search_active = false;
+        }
+    }
+
+    pub fn sync_label_search(&mut self, active: bool) {
+        self.label_search_active = self.mode == EngineMode::LabelMode && active;
     }
 
     pub fn mode(&self) -> EngineMode {
@@ -443,11 +460,13 @@ impl HookRouter {
         {
             self.swallowed_keys.insert(ev.code);
             if ev.phase == KeyPhase::Down {
-                self.mode = if self.mode == EngineMode::LabelMode {
-                    EngineMode::Normal
+                if self.mode == EngineMode::LabelMode {
+                    self.mode = EngineMode::Normal;
+                    self.label_search_active = false;
                 } else {
-                    EngineMode::LabelMode
-                };
+                    self.mode = EngineMode::LabelMode;
+                    self.label_search_active = self.config.label_start_in_search_mode;
+                }
                 actions.push(HookAction::ToggleLabelMode);
             }
             return (InterceptDecision::Swallow, actions);
@@ -500,6 +519,7 @@ impl HookRouter {
             self.swallowed_keys.insert(ev.code);
             if ev.phase == KeyPhase::Down {
                 self.mode = EngineMode::Normal;
+                self.label_search_active = false;
                 self.scroll_held = false;
                 self.active_free_directions.clear();
                 actions.push(HookAction::Engine(EngineEvent::ExitToNormal));
@@ -521,6 +541,65 @@ impl HookRouter {
             self.swallowed_keys.insert(ev.code);
             actions.push(HookAction::Engine(EngineEvent::Backspace));
             return (InterceptDecision::Swallow, actions);
+        }
+
+        // Label Mode Spotlight Text Search (Shortcat-style):
+        // - Pressing `/` in Compact Keycap Mode enters Spotlight Search.
+        // - While Spotlight Search is active, Space types into the query, Tab/Shift+Tab and
+        //   ArrowUp/ArrowDown cycle matches, and Enter clicks the highlighted match.
+        if self.mode == EngineMode::LabelMode {
+            let masked_mods = mask_relevant_modifiers(ev.modifiers);
+            let non_shift = Modifiers::from_bits_truncate(
+                masked_mods.bits() & !Modifiers::SHIFT.bits(),
+            );
+
+            if self.label_search_active {
+                if non_shift.is_empty() {
+                    if ev.code == KeyCode::TAB {
+                        self.swallowed_keys.insert(ev.code);
+                        let delta = if ev.modifiers.contains(Modifiers::SHIFT) {
+                            -1
+                        } else {
+                            1
+                        };
+                        actions.push(HookAction::Engine(EngineEvent::LabelSearchNavigate {
+                            delta,
+                        }));
+                        return (InterceptDecision::Swallow, actions);
+                    }
+                    if ev.code == KeyCode::ARROW_DOWN || ev.code == KeyCode::ARROW_UP {
+                        self.swallowed_keys.insert(ev.code);
+                        let delta = if ev.code == KeyCode::ARROW_DOWN { 1 } else { -1 };
+                        actions.push(HookAction::Engine(EngineEvent::LabelSearchNavigate {
+                            delta,
+                        }));
+                        return (InterceptDecision::Swallow, actions);
+                    }
+                    if ev.code == KeyCode::RETURN {
+                        self.swallowed_keys.insert(ev.code);
+                        if ev.phase == KeyPhase::Down {
+                            actions.push(HookAction::Engine(EngineEvent::LabelSearchConfirm));
+                        }
+                        return (InterceptDecision::Swallow, actions);
+                    }
+                    if let Some(ch) = ev.code.to_search_char(ev.modifiers.contains(Modifiers::SHIFT))
+                    {
+                        self.swallowed_keys.insert(ev.code);
+                        actions.push(HookAction::Engine(EngineEvent::KeyChar { ch }));
+                        return (InterceptDecision::Swallow, actions);
+                    }
+                    self.swallowed_keys.insert(ev.code);
+                    return (InterceptDecision::Swallow, actions);
+                }
+                return (InterceptDecision::PassThrough, actions);
+            } else if ev.code == KeyCode::SLASH && masked_mods.is_empty() {
+                self.swallowed_keys.insert(ev.code);
+                if ev.phase == KeyPhase::Down {
+                    self.label_search_active = true;
+                    actions.push(HookAction::Engine(EngineEvent::ToggleLabelSearch));
+                }
+                return (InterceptDecision::Swallow, actions);
+            }
         }
 
         if self.config.cycle_monitor.is_some_and(|c| c.matches(&ev)) {
@@ -948,6 +1027,51 @@ mod tests {
                 direction: Direction::Up,
                 step: NudgeStep::Fine
             })]
+        ));
+    }
+
+    #[test]
+    fn label_mode_routes_slash_into_spotlight_search_and_captures_space_tab_enter() {
+        let cfg = HookRouteConfig::from_config_json(&default_frontend_config_json_for_os("macos"));
+        let mut router = HookRouter::new(cfg);
+        router.sync_engine_state(EngineMode::LabelMode, false);
+
+        // Press `/` in Compact Keycaps -> enters Spotlight text search.
+        let (dec, actions) = router.route_event(ev(KeyCode::SLASH, Modifiers::EMPTY, KeyPhase::Down));
+        assert_eq!(dec, InterceptDecision::Swallow);
+        assert!(matches!(
+            actions.as_slice(),
+            [HookAction::Engine(EngineEvent::ToggleLabelSearch)]
+        ));
+
+        // Space now types a space into the query instead of firing LeftClick!
+        let (dec, actions) = router.route_event(ev(KeyCode::SPACE, Modifiers::EMPTY, KeyPhase::Down));
+        assert_eq!(dec, InterceptDecision::Swallow);
+        assert!(matches!(
+            actions.as_slice(),
+            [HookAction::Engine(EngineEvent::KeyChar { ch: ' ' })]
+        ));
+
+        // Tab / Shift+Tab cycle matches instead of switching monitor!
+        let (dec, actions) = router.route_event(ev(KeyCode::TAB, Modifiers::EMPTY, KeyPhase::Down));
+        assert_eq!(dec, InterceptDecision::Swallow);
+        assert!(matches!(
+            actions.as_slice(),
+            [HookAction::Engine(EngineEvent::LabelSearchNavigate { delta: 1 })]
+        ));
+        let (dec, actions) = router.route_event(ev(KeyCode::TAB, Modifiers::SHIFT, KeyPhase::Down));
+        assert_eq!(dec, InterceptDecision::Swallow);
+        assert!(matches!(
+            actions.as_slice(),
+            [HookAction::Engine(EngineEvent::LabelSearchNavigate { delta: -1 })]
+        ));
+
+        // Enter confirms the selected match instead of firing DoubleClick!
+        let (dec, actions) = router.route_event(ev(KeyCode::RETURN, Modifiers::EMPTY, KeyPhase::Down));
+        assert_eq!(dec, InterceptDecision::Swallow);
+        assert!(matches!(
+            actions.as_slice(),
+            [HookAction::Engine(EngineEvent::LabelSearchConfirm)]
         ));
     }
 }

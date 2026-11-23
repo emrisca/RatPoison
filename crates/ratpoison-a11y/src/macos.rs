@@ -609,6 +609,51 @@ impl MacOSAccessibilityProvider {
         }
     }
 
+    /// Extracts the most descriptive user-visible label for an accessibility element.
+    /// Checks `AXTitle` -> `AXDescription` -> `AXValue` (string) -> `AXHelp`, and falls back
+    /// to inspecting up to 4 immediate child elements (e.g. browser `AXLink`/`AXButton` wrapping
+    /// `AXStaticText` nodes) so Spotlight text search finds visible web and AppKit text reliably.
+    fn extract_element_title(element: AXUIElementRef) -> Option<String> {
+        fn clean(s: String) -> Option<String> {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                let mut out = trimmed.replace(['\n', '\r', '\t'], " ");
+                while out.contains("  ") {
+                    out = out.replace("  ", " ");
+                }
+                if out.chars().count() > 120 {
+                    out = out.chars().take(120).collect();
+                }
+                Some(out)
+            }
+        }
+
+        for attr in ["AXTitle", "AXDescription", "AXValue", "AXHelp"] {
+            if let Some(val) = Self::copy_string_attr(element, attr).and_then(clean) {
+                return Some(val);
+            }
+        }
+
+        if let Some(children_arr) = Self::copy_attr(element, "AXChildren") {
+            let count = unsafe { CFArrayGetCount(children_arr.as_ptr()) }.min(4);
+            for i in 0..count {
+                let child = unsafe { CFArrayGetValueAtIndex(children_arr.as_ptr(), i) };
+                if child.is_null() {
+                    continue;
+                }
+                for attr in ["AXTitle", "AXValue", "AXDescription"] {
+                    if let Some(val) = Self::copy_string_attr(child, attr).and_then(clean) {
+                        return Some(val);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
     fn copy_string_attr(element: AXUIElementRef, attr_name: &str) -> Option<String> {
         let val = Self::copy_attr(element, attr_name)?;
         unsafe { cfstring_to_string(val.as_ptr()) }
@@ -859,12 +904,7 @@ impl AccessibilityProvider for MacOSAccessibilityProvider {
                     if let Some(bounds) = Self::copy_bounds(elem_ptr) {
                         let is_visible = bounds.width > 1.0 && bounds.height > 1.0;
                         if is_visible {
-                            let title = Self::copy_string_attr(elem_ptr, "AXTitle")
-                                .filter(|s| !s.is_empty())
-                                .or_else(|| {
-                                    Self::copy_string_attr(elem_ptr, "AXDescription")
-                                        .filter(|s| !s.is_empty())
-                                });
+                            let title = Self::extract_element_title(elem_ptr);
 
                             let id = format!("macos-ax-{owner_pid}-{nodes_visited}");
                             elements.push(AccessibleElement::new(

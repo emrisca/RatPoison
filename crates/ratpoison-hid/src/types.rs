@@ -153,6 +153,24 @@ impl KeyCode {
         }
     }
 
+    /// Converts an ASCII letter, digit, space, or common search punctuation keycode into
+    /// a printable character for Label Mode Spotlight text search.
+    pub const fn to_search_char(self, shift: bool) -> Option<char> {
+        match self.0 {
+            0x41..=0x5A => Some(((self.0 as u8) + 32) as char),
+            0x30..=0x39 => Some((self.0 as u8) as char),
+            0x0020 => Some(' '),
+            x if x == Self::MINUS.0 => Some(if shift { '_' } else { '-' }),
+            x if x == Self::PERIOD.0 => Some('.'),
+            x if x == Self::SLASH.0 => Some('/'),
+            x if x == Self::COMMA.0 => Some(','),
+            x if x == Self::APOSTROPHE.0 => Some('\''),
+            x if x == Self::SEMICOLON.0 => Some(if shift { ':' } else { ';' }),
+            x if x == Self::EQUAL.0 => Some(if shift { '+' } else { '=' }),
+            _ => None,
+        }
+    }
+
     /// Returns the raw numeric keycode value (for in-memory matching only; never log).
     #[inline]
     pub const fn raw(self) -> u16 {
