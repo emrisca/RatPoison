@@ -10,6 +10,7 @@ import {
   RotateCcw,
   Search,
   Settings,
+  ShieldAlert,
   Tag,
   X,
 } from 'lucide-react';
@@ -20,7 +21,7 @@ import {
   scoreSettingMatch,
   type SettingDescriptor,
 } from '../../config/defaults';
-import { subscribeConfigUpdated } from '../../ipc/tauriBridge';
+import { isTauriRuntime, subscribeConfigUpdated } from '../../ipc/tauriBridge';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import type { PlatformOs, SettingsTabId } from '../../types/ipc';
 import { LiveOverlayPreview } from './LiveOverlayPreview';
@@ -58,6 +59,7 @@ function groupBySection(items: SettingDescriptor[]): Array<[string, SettingDescr
  */
 export function SettingsView() {
   const platform = useSettingsStore((s) => s.platform);
+  const permissions = useSettingsStore((s) => s.permissions);
   const defaultConfig = useSettingsStore((s) => s.defaultConfig);
   const config = useSettingsStore((s) => s.config);
   const monitors = useSettingsStore((s) => s.monitors);
@@ -75,6 +77,9 @@ export function SettingsView() {
   const resetTabToDefaults = useSettingsStore((s) => s.resetTabToDefaults);
   const resetAllDefaults = useSettingsStore((s) => s.resetAllDefaults);
   const applyOsKeybindPreset = useSettingsStore((s) => s.applyOsKeybindPreset);
+  const refreshPermissions = useSettingsStore((s) => s.refreshPermissions);
+  const requestPermissions = useSettingsStore((s) => s.requestPermissions);
+  const openAccessibilitySettings = useSettingsStore((s) => s.openAccessibilitySettings);
   const checkForUpdates = useSettingsStore((s) => s.checkForUpdates);
   const clearFeedback = useSettingsStore((s) => s.clearFeedback);
 
@@ -99,6 +104,15 @@ export function SettingsView() {
       unlisten?.();
     };
   }, [loadInitialData, applyExternalConfig]);
+
+  // Poll permission status every 2s while global hook is waiting on OS Accessibility trust
+  useEffect(() => {
+    if (!isTauriRuntime() || !permissions || permissions.hookActive) return undefined;
+    const id = window.setInterval(() => {
+      void refreshPermissions();
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [permissions, refreshPermissions]);
 
   // Automatically check GitHub Releases once on startup when enabled
   useEffect(() => {
@@ -350,6 +364,44 @@ export function SettingsView() {
             </button>
           )}
         </header>
+
+        {isTauriRuntime() && permissions && !permissions.hookActive && (
+          <div className="rp-banner rp-banner--warning" role="status">
+            <div className="rp-banner-content">
+              <ShieldAlert size={16} />
+              <span>
+                <strong>Global hotkeys paused ({config.keybindings.toggleGrid}):</strong>{' '}
+                {permissions.guidance ??
+                  'Grant Accessibility & Input Monitoring permissions so RatPoison can listen for hotkeys.'}
+              </span>
+            </div>
+            <div className="rp-banner-actions">
+              <button
+                type="button"
+                className="rp-btn rp-btn--primary"
+                onClick={() => void requestPermissions()}
+              >
+                Grant Permission
+              </button>
+              {platform.os === 'macos' && (
+                <button
+                  type="button"
+                  className="rp-btn rp-btn--secondary"
+                  onClick={() => void openAccessibilitySettings()}
+                >
+                  Open Accessibility
+                </button>
+              )}
+              <button
+                type="button"
+                className="rp-btn rp-btn--secondary"
+                onClick={() => void refreshPermissions()}
+              >
+                Re-check
+              </button>
+            </div>
+          </div>
+        )}
 
         {errorMessage && (
           <div className="rp-banner rp-banner--error" role="alert">

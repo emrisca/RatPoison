@@ -402,16 +402,39 @@ impl AccessibilityProvider for MacOSAccessibilityProvider {
             }
         }
 
-        // Collect root windows from AXWindows (or fallback to AXFocusedWindow)
-        let windows_ref = Self::copy_attr(app_ref.as_ptr(), "AXWindows")
-            .or_else(|| Self::copy_attr(app_ref.as_ptr(), "AXFocusedWindow"));
-
         let mut elements = Vec::new();
         let mut nodes_visited = 0usize;
         let mut max_depth_reached = 0usize;
         let mut truncated_by_budget = false;
 
-        let Some(win_container) = windows_ref else {
+        // Iterative traversal stack holding `(element_ptr, depth, z_order)`.
+        // Keep parent CFArrayRefs / AXUIElementRefs alive in `cf_arena` while traversing.
+        let mut cf_arena: Vec<ScopedCFRef> = Vec::new();
+        let mut stack: Vec<(AXUIElementRef, usize, u32)> = Vec::new();
+
+        // Collect root windows from AXWindows (CFArray), falling back to AXFocusedWindow (single element).
+        if let Some(win_arr) = Self::copy_attr(app_ref.as_ptr(), "AXWindows") {
+            let win_count = unsafe { CFArrayGetCount(win_arr.as_ptr()) };
+            for w_idx in (0..win_count).rev() {
+                let win_ptr = unsafe { CFArrayGetValueAtIndex(win_arr.as_ptr(), w_idx) };
+                if !win_ptr.is_null() {
+                    let win_title = Self::copy_string_attr(win_ptr, "AXTitle");
+                    if win_title.as_deref() == Some("RatPoison Overlay") {
+                        continue;
+                    }
+                    stack.push((win_ptr, 1, w_idx as u32));
+                }
+            }
+            cf_arena.push(win_arr);
+        } else if let Some(focused_win) = Self::copy_attr(app_ref.as_ptr(), "AXFocusedWindow") {
+            let win_title = Self::copy_string_attr(focused_win.as_ptr(), "AXTitle");
+            if win_title.as_deref() != Some("RatPoison Overlay") {
+                stack.push((focused_win.as_ptr(), 1, 0));
+                cf_arena.push(focused_win);
+            }
+        }
+
+        if stack.is_empty() {
             return Ok(AccessibilitySnapshot {
                 platform: self.platform_name().to_string(),
                 elements,
@@ -420,23 +443,6 @@ impl AccessibilityProvider for MacOSAccessibilityProvider {
                 elapsed: start.elapsed(),
                 truncated_by_budget,
             });
-        };
-
-        // Iterative traversal stack holding `(ScopedCFRef_owner_array_or_single, element_ptr, depth, z_order)`
-        // To ensure memory safety with CFArray children, we keep parent CFArrayRefs alive in an arena vector
-        // while traversing their element pointers.
-        let mut cf_arena: Vec<ScopedCFRef> = Vec::new();
-        let mut stack: Vec<(AXUIElementRef, usize, u32)> = Vec::new();
-
-        let win_count = unsafe { CFArrayGetCount(win_container.as_ptr()) };
-        if win_count > 0 {
-            for w_idx in (0..win_count).rev() {
-                let win_ptr = unsafe { CFArrayGetValueAtIndex(win_container.as_ptr(), w_idx) };
-                if !win_ptr.is_null() {
-                    stack.push((win_ptr, 1, w_idx as u32));
-                }
-            }
-            cf_arena.push(win_container);
         }
 
         while let Some((elem_ptr, depth, z_order)) = stack.pop() {
@@ -483,8 +489,11 @@ impl AccessibilityProvider for MacOSAccessibilityProvider {
             }
 
             if depth < budget.max_depth {
-                // Prefer AXVisibleChildren when available to avoid walking thousands of off-screen rows
+                // Prefer non-empty AXVisibleChildren to avoid walking thousands of off-screen rows,
+                // but fall back to AXChildren whenever AXVisibleChildren is absent OR returns an empty array
+                // (common for AXWindow, AXScrollArea, and WKWebView AXWebArea containers on macOS).
                 let children_ref = Self::copy_attr(elem_ptr, "AXVisibleChildren")
+                    .filter(|arr| unsafe { CFArrayGetCount(arr.as_ptr()) } > 0)
                     .or_else(|| Self::copy_attr(elem_ptr, "AXChildren"));
 
                 if let Some(children_arr) = children_ref {

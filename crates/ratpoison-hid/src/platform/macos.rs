@@ -47,6 +47,7 @@ struct CGPoint {
 
 // CGEventTap constants
 const K_CG_HID_EVENT_TAP: u32 = 0;
+const K_CG_SESSION_EVENT_TAP: u32 = 1;
 const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
 const K_CG_EVENT_TAP_OPTION_DEFAULT: u32 = 0;
 
@@ -88,7 +89,9 @@ const K_CG_EVENT_FLAG_MASK_SECONDARY_FN: u64 = 0x0080_0000;
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
+    static kAXTrustedCheckOptionPrompt: CFStringRef;
     fn AXIsProcessTrusted() -> u8;
+    fn AXIsProcessTrustedWithOptions(options: *const c_void) -> u8;
 }
 
 #[link(name = "Carbon", kind = "framework")]
@@ -99,6 +102,7 @@ extern "C" {
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     fn CGPreflightListenEventAccess() -> u8;
+    fn CGRequestListenEventAccess() -> u8;
 
     fn CGEventTapCreate(
         tap: u32,
@@ -140,6 +144,17 @@ extern "C" {
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
     static kCFRunLoopCommonModes: CFStringRef;
+    static kCFBooleanTrue: *const c_void;
+    static kCFTypeDictionaryKeyCallBacks: c_void;
+    static kCFTypeDictionaryValueCallBacks: c_void;
+    fn CFDictionaryCreate(
+        allocator: *const c_void,
+        keys: *const *const c_void,
+        values: *const *const c_void,
+        num_values: isize,
+        key_callbacks: *const c_void,
+        value_callbacks: *const c_void,
+    ) -> *mut c_void;
 
     fn CFMachPortCreateRunLoopSource(
         allocator: *const c_void,
@@ -193,6 +208,37 @@ pub fn is_accessibility_trusted() -> bool {
 pub fn is_input_monitoring_granted() -> bool {
     // SAFETY: Pure C status query with no pointer arguments.
     unsafe { CGPreflightListenEventAccess() != 0 }
+}
+
+/// Triggers the native macOS Accessibility & Input Monitoring trust prompts if not yet granted.
+pub fn request_accessibility_and_input_monitoring() -> bool {
+    // SAFETY: Builds a single-entry CoreFoundation dictionary `{ kAXTrustedCheckOptionPrompt: true }`
+    // and releases it via `CfOwned`.
+    let trusted = unsafe {
+        let keys = [kAXTrustedCheckOptionPrompt as *const c_void];
+        let vals = [kCFBooleanTrue];
+        let dict_raw = CFDictionaryCreate(
+            ptr::null(),
+            keys.as_ptr(),
+            vals.as_ptr(),
+            1,
+            &kCFTypeDictionaryKeyCallBacks as *const c_void,
+            &kCFTypeDictionaryValueCallBacks as *const c_void,
+        );
+        let _dict_guard = CfOwned::new(dict_raw);
+        if dict_raw.is_null() {
+            AXIsProcessTrusted() != 0
+        } else {
+            AXIsProcessTrustedWithOptions(dict_raw) != 0
+        }
+    };
+    if !is_input_monitoring_granted() {
+        // SAFETY: Standard CoreGraphics permission request API.
+        unsafe {
+            let _ = CGRequestListenEventAccess();
+        }
+    }
+    trusted
 }
 
 /// Returns `true` when macOS Secure Event Input is active (e.g., password fields,
@@ -269,6 +315,34 @@ pub fn macos_keycode_to_normalized(cg_code: u16) -> KeyCode {
         0x07 => KeyCode::from_ascii_upper(b'X'),
         0x10 => KeyCode::from_ascii_upper(b'Y'),
         0x06 => KeyCode::from_ascii_upper(b'Z'),
+        // ANSI US digits
+        0x1D => KeyCode::from_ascii_digit(b'0'),
+        0x12 => KeyCode::from_ascii_digit(b'1'),
+        0x13 => KeyCode::from_ascii_digit(b'2'),
+        0x14 => KeyCode::from_ascii_digit(b'3'),
+        0x15 => KeyCode::from_ascii_digit(b'4'),
+        0x17 => KeyCode::from_ascii_digit(b'5'),
+        0x16 => KeyCode::from_ascii_digit(b'6'),
+        0x1A => KeyCode::from_ascii_digit(b'7'),
+        0x1C => KeyCode::from_ascii_digit(b'8'),
+        0x19 => KeyCode::from_ascii_digit(b'9'),
+        // Arrow keys
+        0x7B => KeyCode::ARROW_LEFT,
+        0x7C => KeyCode::ARROW_RIGHT,
+        0x7D => KeyCode::ARROW_DOWN,
+        0x7E => KeyCode::ARROW_UP,
+        // Common punctuation
+        0x2B => KeyCode::COMMA,
+        0x2F => KeyCode::PERIOD,
+        0x2C => KeyCode::SLASH,
+        0x29 => KeyCode::SEMICOLON,
+        0x27 => KeyCode::APOSTROPHE,
+        0x21 => KeyCode::BRACKET_LEFT,
+        0x1E => KeyCode::BRACKET_RIGHT,
+        0x1B => KeyCode::MINUS,
+        0x18 => KeyCode::EQUAL,
+        0x32 => KeyCode::GRAVE,
+        0x2A => KeyCode::BACKSLASH,
         other => KeyCode(0x8000 | other),
     }
 }
@@ -462,14 +536,26 @@ impl KeyboardHookBackend for MacOsKeyboardHook {
                 // SAFETY: `cg_event_tap_trampoline` matches `CGEventTapCallBack`, and `ctx`
                 // outlives `CFRunLoopRun` on this thread.
                 let tap_raw = unsafe {
-                    CGEventTapCreate(
+                    let hid = CGEventTapCreate(
                         K_CG_HID_EVENT_TAP,
                         K_CG_HEAD_INSERT_EVENT_TAP,
                         K_CG_EVENT_TAP_OPTION_DEFAULT,
                         event_mask,
                         cg_event_tap_trampoline,
                         ctx_ptr,
-                    )
+                    );
+                    if hid.is_null() {
+                        CGEventTapCreate(
+                            K_CG_SESSION_EVENT_TAP,
+                            K_CG_HEAD_INSERT_EVENT_TAP,
+                            K_CG_EVENT_TAP_OPTION_DEFAULT,
+                            event_mask,
+                            cg_event_tap_trampoline,
+                            ctx_ptr,
+                        )
+                    } else {
+                        hid
+                    }
                 };
 
                 let Some(tap_guard) = CfOwned::new(tap_raw) else {

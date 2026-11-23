@@ -3,6 +3,7 @@ import {
   buildDemoOverlayState,
   enforceOverlayClickThrough,
   ipcGetConfig,
+  ipcGetOverlayState,
   isTauriRuntime,
   subscribeConfigUpdated,
   subscribeOverlayState,
@@ -38,10 +39,16 @@ export function OverlayView() {
       await enforceOverlayClickThrough();
 
       try {
-        const cfg = await ipcGetConfig();
-        if (active) setConfig(cfg);
+        const [cfg, initialOverlay] = await Promise.all([
+          ipcGetConfig(),
+          ipcGetOverlayState(),
+        ]);
+        if (active) {
+          setConfig(cfg);
+          if (initialOverlay) setOverlayState(initialOverlay);
+        }
       } catch (err) {
-        console.warn('[RatPoison] Overlay failed to fetch initial config:', err);
+        console.warn('[RatPoison] Overlay failed to fetch initial state:', err);
       }
 
       unlistenOverlay = await subscribeOverlayState((payload) => {

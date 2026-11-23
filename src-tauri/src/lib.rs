@@ -1,25 +1,110 @@
-//! RatPoison Tauri v2 Desktop Application Shell.
+//! RatPoison Tauri v2 Desktop Runtime
 //!
 //! Wires `ratpoison-core`, `ratpoison-hid`, and `ratpoison-a11y`
-//! to the React/TypeScript overlay & searchable settings frontend via typed IPC commands.
+//! to the React/TypeScript overlay & searchable settings frontend via typed IPC commands
+//! and a live cross-platform global keyboard hook.
 
 pub mod bridge;
+pub mod hotkeys;
 pub mod ipc;
 pub mod updater;
 
 use crate::bridge::AppRuntime;
+use crate::hotkeys::{HookAction, HookRouteConfig, HookRouter};
 use crate::ipc::{
-    MonitorDto, OverlayStatePayloadDto, PlatformInfoDto, UpdateCheckResultDto, EVENT_CONFIG_UPDATED,
+    MonitorDto, OverlayStatePayloadDto, PermissionStatusDto, PlatformInfoDto, UpdateCheckResultDto,
+    EVENT_CONFIG_UPDATED,
 };
-use ratpoison_core::{EngineEvent, LogicalRect, MonitorInfo, MonitorLayout, PhysicalPoint};
+use ratpoison_core::{EngineEvent, EngineMode, LogicalRect, MonitorInfo, MonitorLayout, PhysicalPoint};
+use ratpoison_hid::{
+    check_platform_permissions, create_platform_keyboard_hook, request_platform_permissions,
+    KeyboardHookBackend,
+};
 use serde_json::Value;
-use std::sync::Mutex;
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     AppHandle, Emitter, Manager, State,
 };
 
-pub struct SharedRuntime(pub Mutex<AppRuntime>);
+pub struct SharedRuntime(pub Arc<Mutex<AppRuntime>>);
+
+pub struct HookController {
+    hook: Box<dyn KeyboardHookBackend>,
+    router: Arc<Mutex<HookRouter>>,
+    action_tx: mpsc::Sender<HookAction>,
+    last_error: Option<String>,
+}
+
+impl HookController {
+    pub fn new(router: Arc<Mutex<HookRouter>>, action_tx: mpsc::Sender<HookAction>) -> Self {
+        Self {
+            hook: create_platform_keyboard_hook(),
+            router,
+            action_tx,
+            last_error: None,
+        }
+    }
+
+    /// Attempts to install and start the OS-level global keyboard hook if not already active.
+    pub fn ensure_started(&mut self) -> bool {
+        if self.hook.is_running() {
+            self.last_error = None;
+            return true;
+        }
+        let router = Arc::clone(&self.router);
+        let tx = self.action_tx.clone();
+        match self.hook.start(Box::new(move |raw_ev| {
+            let Ok(mut guard) = router.lock() else {
+                return ratpoison_hid::InterceptDecision::PassThrough;
+            };
+            let (decision, actions) = guard.route_event(raw_ev);
+            drop(guard);
+            for action in actions {
+                let _ = tx.send(action);
+            }
+            decision
+        })) {
+            Ok(()) => {
+                self.last_error = None;
+                true
+            }
+            Err(err) => {
+                self.last_error = Some(err.to_string());
+                false
+            }
+        }
+    }
+
+    pub fn update_config(&self, cfg_json: &Value) {
+        if let Ok(mut guard) = self.router.lock() {
+            guard.update_config(HookRouteConfig::from_config_json(cfg_json));
+        }
+    }
+
+    pub fn sync_engine_state(&self, mode: EngineMode, dragging: bool) {
+        if let Ok(mut guard) = self.router.lock() {
+            guard.sync_engine_state(mode, dragging);
+        }
+    }
+
+    pub fn status_dto(&self) -> PermissionStatusDto {
+        let report = check_platform_permissions();
+        PermissionStatusDto {
+            platform: report.platform.to_string(),
+            accessibility_granted: report.accessibility_granted,
+            input_monitoring_granted: report.input_monitoring_granted,
+            secure_input_active: report.secure_input_active,
+            hook_active: self.hook.is_running(),
+            hook_backend: self.hook.backend_name().to_string(),
+            guidance: report.guidance,
+            last_error: self.last_error.clone(),
+        }
+    }
+}
+
+pub struct SharedHook(pub Arc<Mutex<HookController>>);
 
 fn query_tauri_monitors(app: &AppHandle) -> Vec<MonitorInfo> {
     let primary_name = app
@@ -65,11 +150,159 @@ fn query_tauri_monitors(app: &AppHandle) -> Vec<MonitorInfo> {
 }
 
 fn open_settings_window(app: &AppHandle) {
-    if let Some(win) = app.get_webview_window("settings") {
-        let _ = win.show();
-        let _ = win.unminimize();
-        let _ = win.set_focus();
-    }
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(win) = handle.get_webview_window("settings") {
+            let _ = win.show();
+            let _ = win.unminimize();
+            let _ = win.set_focus();
+        }
+    });
+}
+
+fn spawn_hook_worker(
+    app_handle: AppHandle,
+    runtime: Arc<Mutex<AppRuntime>>,
+    router: Arc<Mutex<HookRouter>>,
+    action_rx: mpsc::Receiver<HookAction>,
+) {
+    let _ = std::thread::Builder::new()
+        .name("ratpoison-hook-worker".to_string())
+        .spawn(move || loop {
+            let in_free_mode = router
+                .lock()
+                .map(|r| r.mode() == EngineMode::FreeMode)
+                .unwrap_or(false);
+
+            let maybe_action = if in_free_mode {
+                match action_rx.recv_timeout(Duration::from_millis(16)) {
+                    Ok(action) => Some(action),
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        Some(HookAction::Engine(EngineEvent::FreeModeTick { dt_ms: 16 }))
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            } else {
+                match action_rx.recv() {
+                    Ok(action) => Some(action),
+                    Err(_) => break,
+                }
+            };
+
+            let Some(action) = maybe_action else {
+                continue;
+            };
+
+            match action {
+                HookAction::OpenSettings => {
+                    open_settings_window(&app_handle);
+                }
+                HookAction::ToggleGrid => {
+                    if let Ok(mut rt) = runtime.lock() {
+                        let event = if matches!(
+                            rt.engine.mode(),
+                            EngineMode::Grid | EngineMode::Subgrid | EngineMode::Nudge
+                        ) {
+                            EngineEvent::ExitToNormal
+                        } else {
+                            EngineEvent::ActivateGrid {
+                                monitor_id: None,
+                                preset_id: None,
+                            }
+                        };
+                        let _ = rt.dispatch_event(event, Some(&app_handle));
+                        let mode = rt.engine.mode();
+                        let dragging = rt.engine.snapshot().active_modifiers.dragging;
+                        drop(rt);
+                        if let Ok(mut r) = router.lock() {
+                            r.sync_engine_state(mode, dragging);
+                        }
+                    }
+                }
+                HookAction::ToggleLabelMode => {
+                    if let Ok(mut rt) = runtime.lock() {
+                        let _ = rt.dispatch_event(EngineEvent::ActivateLabelMode, Some(&app_handle));
+                        let mode = rt.engine.mode();
+                        let dragging = rt.engine.snapshot().active_modifiers.dragging;
+                        drop(rt);
+                        if let Ok(mut r) = router.lock() {
+                            r.sync_engine_state(mode, dragging);
+                        }
+                    }
+                }
+                HookAction::ToggleFreeMode => {
+                    if let Ok(mut rt) = runtime.lock() {
+                        let _ = rt.dispatch_event(
+                            EngineEvent::ActivateFreeMode { preset_id: None },
+                            Some(&app_handle),
+                        );
+                        let mode = rt.engine.mode();
+                        let dragging = rt.engine.snapshot().active_modifiers.dragging;
+                        drop(rt);
+                        if let Ok(mut r) = router.lock() {
+                            r.sync_engine_state(mode, dragging);
+                        }
+                    }
+                }
+                HookAction::Engine(engine_event) => {
+                    let trigger_immediate_step = matches!(
+                        engine_event,
+                        EngineEvent::FreeModeKeyDown {
+                            key: ratpoison_core::FreeKey::MoveUp
+                                | ratpoison_core::FreeKey::MoveDown
+                                | ratpoison_core::FreeKey::MoveLeft
+                                | ratpoison_core::FreeKey::MoveRight
+                                | ratpoison_core::FreeKey::ScrollUp
+                                | ratpoison_core::FreeKey::ScrollDown
+                                | ratpoison_core::FreeKey::ScrollLeft
+                                | ratpoison_core::FreeKey::ScrollRight
+                        }
+                    );
+                    let (dirs, scroll_held) = router
+                        .lock()
+                        .map(|r| (r.active_directions_strings(), r.is_scroll_held()))
+                        .unwrap_or_default();
+                    if let Ok(mut rt) = runtime.lock() {
+                        rt.active_free_directions = dirs;
+                        rt.free_scroll_active = scroll_held;
+                        let _ = rt.dispatch_event(engine_event, Some(&app_handle));
+                        if trigger_immediate_step && rt.engine.mode() == EngineMode::FreeMode {
+                            let _ = rt.dispatch_event(
+                                EngineEvent::FreeModeTick { dt_ms: 16 },
+                                Some(&app_handle),
+                            );
+                        }
+                        let mode = rt.engine.mode();
+                        let dragging = rt.engine.snapshot().active_modifiers.dragging;
+                        drop(rt);
+                        if let Ok(mut r) = router.lock() {
+                            r.sync_engine_state(mode, dragging);
+                        }
+                    }
+                }
+            }
+        });
+}
+
+fn spawn_permission_watcher(hook_ctrl: Arc<Mutex<HookController>>) {
+    let _ = std::thread::Builder::new()
+        .name("ratpoison-perm-watcher".to_string())
+        .spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(1500));
+            let Ok(mut ctrl) = hook_ctrl.lock() else {
+                break;
+            };
+            if ctrl.hook.is_running() {
+                // Keep monitoring at a slow cadence in case the hook ever stops.
+                drop(ctrl);
+                std::thread::sleep(Duration::from_secs(5));
+                continue;
+            }
+            let report = check_platform_permissions();
+            if report.accessibility_granted {
+                let _ = ctrl.ensure_started();
+            }
+        });
 }
 
 #[tauri::command]
@@ -82,11 +315,16 @@ fn get_config(state: State<'_, SharedRuntime>) -> Result<Value, String> {
 fn update_config(
     app: AppHandle,
     state: State<'_, SharedRuntime>,
+    hook: State<'_, SharedHook>,
     config: Value,
 ) -> Result<Value, String> {
     let mut rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
     let updated = rt.config_store.update_and_save(config)?;
     rt.sync_core_config_from_store();
+    drop(rt);
+    if let Ok(ctrl) = hook.0.lock() {
+        ctrl.update_config(&updated);
+    }
     let _ = app.emit(EVENT_CONFIG_UPDATED, &updated);
     Ok(updated)
 }
@@ -95,11 +333,16 @@ fn update_config(
 fn reset_setting_key(
     app: AppHandle,
     state: State<'_, SharedRuntime>,
+    hook: State<'_, SharedHook>,
     key: String,
 ) -> Result<Value, String> {
     let mut rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
     let updated = rt.config_store.reset_key_and_save(&key)?;
     rt.sync_core_config_from_store();
+    drop(rt);
+    if let Ok(ctrl) = hook.0.lock() {
+        ctrl.update_config(&updated);
+    }
     let _ = app.emit(EVENT_CONFIG_UPDATED, &updated);
     Ok(updated)
 }
@@ -128,6 +371,45 @@ fn get_platform_info(state: State<'_, SharedRuntime>) -> Result<PlatformInfoDto,
 }
 
 #[tauri::command]
+fn get_overlay_state(state: State<'_, SharedRuntime>) -> Result<OverlayStatePayloadDto, String> {
+    let rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
+    Ok(rt.current_overlay_payload())
+}
+
+#[tauri::command]
+fn get_permissions(hook: State<'_, SharedHook>) -> Result<PermissionStatusDto, String> {
+    let mut ctrl = hook.0.lock().map_err(|_| "hook lock poisoned".to_string())?;
+    if !ctrl.hook.is_running() && check_platform_permissions().accessibility_granted {
+        let _ = ctrl.ensure_started();
+    }
+    Ok(ctrl.status_dto())
+}
+
+#[tauri::command]
+fn request_permissions(hook: State<'_, SharedHook>) -> Result<PermissionStatusDto, String> {
+    let _ = request_platform_permissions();
+    let mut ctrl = hook.0.lock().map_err(|_| "hook lock poisoned".to_string())?;
+    let _ = ctrl.ensure_started();
+    Ok(ctrl.status_dto())
+}
+
+#[tauri::command]
+fn open_accessibility_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            .spawn()
+            .map_err(|e| format!("Failed to open macOS Accessibility settings: {e}"))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(())
+    }
+}
+
+#[tauri::command]
 async fn check_for_updates(channel: String) -> Result<UpdateCheckResultDto, String> {
     tauri::async_runtime::spawn_blocking(move || updater::check_github_releases(&channel))
         .await
@@ -143,19 +425,36 @@ fn open_external_url(url: String) -> Result<(), String> {
 fn toggle_overlay_mode(
     app: AppHandle,
     state: State<'_, SharedRuntime>,
+    hook: State<'_, SharedHook>,
     mode: String,
 ) -> Result<OverlayStatePayloadDto, String> {
     let mut rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
     let event = match mode.as_str() {
-        "grid" => EngineEvent::ActivateGrid {
-            monitor_id: None,
-            preset_id: None,
-        },
+        "grid" => {
+            if matches!(
+                rt.engine.mode(),
+                EngineMode::Grid | EngineMode::Subgrid | EngineMode::Nudge
+            ) {
+                EngineEvent::ExitToNormal
+            } else {
+                EngineEvent::ActivateGrid {
+                    monitor_id: None,
+                    preset_id: None,
+                }
+            }
+        }
         "label" => EngineEvent::ActivateLabelMode,
         "free" => EngineEvent::ActivateFreeMode { preset_id: None },
         _ => EngineEvent::ExitToNormal,
     };
-    Ok(rt.dispatch_event(event, Some(&app)))
+    let payload = rt.dispatch_event(event, Some(&app));
+    let active_mode = rt.engine.mode();
+    let dragging = rt.engine.snapshot().active_modifiers.dragging;
+    drop(rt);
+    if let Ok(ctrl) = hook.0.lock() {
+        ctrl.sync_engine_state(active_mode, dragging);
+    }
+    Ok(payload)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -170,10 +469,32 @@ pub fn run() {
             // Strictly enforce click-through on the overlay window from the moment it exists.
             if let Some(overlay) = app.get_webview_window("overlay") {
                 let _ = overlay.set_ignore_cursor_events(true);
+                let _ = overlay.set_always_on_top(true);
+                let _ = overlay.set_visible_on_all_workspaces(true);
             }
 
             let monitors = query_tauri_monitors(handle);
-            app.manage(SharedRuntime(Mutex::new(AppRuntime::initialize(monitors))));
+            let runtime_inner = AppRuntime::initialize(monitors);
+            let route_cfg = HookRouteConfig::from_config_json(runtime_inner.config_store.json());
+
+            let runtime = Arc::new(Mutex::new(runtime_inner));
+            let router = Arc::new(Mutex::new(HookRouter::new(route_cfg)));
+            let (action_tx, action_rx) = mpsc::channel::<HookAction>();
+
+            let mut controller = HookController::new(Arc::clone(&router), action_tx);
+            let _ = controller.ensure_started();
+            let hook_arc = Arc::new(Mutex::new(controller));
+
+            spawn_hook_worker(
+                handle.clone(),
+                Arc::clone(&runtime),
+                Arc::clone(&router),
+                action_rx,
+            );
+            spawn_permission_watcher(Arc::clone(&hook_arc));
+
+            app.manage(SharedRuntime(runtime));
+            app.manage(SharedHook(hook_arc));
 
             // Wire native system tray / menu bar menu onto `ratpoison-tray`.
             if let Some(tray) = app.tray_by_id("ratpoison-tray") {
@@ -201,13 +522,26 @@ pub fn run() {
                     "toggle-grid" => {
                         if let Some(rt) = app_handle.try_state::<SharedRuntime>() {
                             if let Ok(mut guard) = rt.0.lock() {
-                                guard.dispatch_event(
+                                let ev = if matches!(
+                                    guard.engine.mode(),
+                                    EngineMode::Grid | EngineMode::Subgrid | EngineMode::Nudge
+                                ) {
+                                    EngineEvent::ExitToNormal
+                                } else {
                                     EngineEvent::ActivateGrid {
                                         monitor_id: None,
                                         preset_id: None,
-                                    },
-                                    Some(app_handle),
-                                );
+                                    }
+                                };
+                                guard.dispatch_event(ev, Some(app_handle));
+                                let mode = guard.engine.mode();
+                                let dragging = guard.engine.snapshot().active_modifiers.dragging;
+                                drop(guard);
+                                if let Some(hk) = app_handle.try_state::<SharedHook>() {
+                                    if let Ok(ctrl) = hk.0.lock() {
+                                        ctrl.sync_engine_state(mode, dragging);
+                                    }
+                                }
                             }
                         }
                     }
@@ -218,6 +552,14 @@ pub fn run() {
                                     EngineEvent::ActivateLabelMode,
                                     Some(app_handle),
                                 );
+                                let mode = guard.engine.mode();
+                                let dragging = guard.engine.snapshot().active_modifiers.dragging;
+                                drop(guard);
+                                if let Some(hk) = app_handle.try_state::<SharedHook>() {
+                                    if let Ok(ctrl) = hk.0.lock() {
+                                        ctrl.sync_engine_state(mode, dragging);
+                                    }
+                                }
                             }
                         }
                     }
@@ -228,6 +570,14 @@ pub fn run() {
                                     EngineEvent::ActivateFreeMode { preset_id: None },
                                     Some(app_handle),
                                 );
+                                let mode = guard.engine.mode();
+                                let dragging = guard.engine.snapshot().active_modifiers.dragging;
+                                drop(guard);
+                                if let Some(hk) = app_handle.try_state::<SharedHook>() {
+                                    if let Ok(ctrl) = hk.0.lock() {
+                                        ctrl.sync_engine_state(mode, dragging);
+                                    }
+                                }
                             }
                         }
                     }
@@ -247,6 +597,10 @@ pub fn run() {
             reset_setting_key,
             get_monitors,
             get_platform_info,
+            get_overlay_state,
+            get_permissions,
+            request_permissions,
+            open_accessibility_settings,
             check_for_updates,
             open_external_url,
             toggle_overlay_mode,

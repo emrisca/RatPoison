@@ -162,6 +162,16 @@ pub fn check_platform_permissions() -> PermissionReport {
     create_platform_keyboard_hook().check_permissions()
 }
 
+/// Prompts the OS for required global input/accessibility permissions (when supported)
+/// and returns the refreshed [`PermissionReport`].
+pub fn request_platform_permissions() -> PermissionReport {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = macos::request_accessibility_and_input_monitoring();
+    }
+    check_platform_permissions()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

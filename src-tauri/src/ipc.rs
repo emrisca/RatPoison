@@ -254,6 +254,21 @@ pub struct UpdateCheckResultDto {
     pub asset_name: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionStatusDto {
+    pub platform: String,
+    pub accessibility_granted: bool,
+    pub input_monitoring_granted: bool,
+    pub secure_input_active: bool,
+    pub hook_active: bool,
+    pub hook_backend: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guidance: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
 /// Returns current UNIX epoch timestamp in seconds.
 pub fn unix_timestamp_secs() -> u64 {
     SystemTime::now()
@@ -712,6 +727,14 @@ impl ConfigStore {
 
     pub fn json(&self) -> &Value {
         &self.raw_json
+    }
+
+    pub fn show_free_mode_hud(&self) -> bool {
+        self.raw_json
+            .get("freeMode")
+            .and_then(|v| v.get("showHudBadge"))
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
     }
 
     pub fn label_charset(&self) -> String {

@@ -109,9 +109,48 @@ impl KeyCode {
     pub const META_L: Self = Self(0x0106);
     pub const META_R: Self = Self(0x0107);
 
-    // Common ASCII letter helpers (uppercase code points for layout-normalized bindings)
+    // Arrow keys (platform-normalized)
+    pub const ARROW_LEFT: Self = Self(0x0200);
+    pub const ARROW_RIGHT: Self = Self(0x0201);
+    pub const ARROW_UP: Self = Self(0x0202);
+    pub const ARROW_DOWN: Self = Self(0x0203);
+
+    // Common punctuation / symbol keys (ASCII code points)
+    pub const COMMA: Self = Self(b',' as u16);
+    pub const PERIOD: Self = Self(b'.' as u16);
+    pub const SLASH: Self = Self(b'/' as u16);
+    pub const SEMICOLON: Self = Self(b';' as u16);
+    pub const APOSTROPHE: Self = Self(b'\'' as u16);
+    pub const BRACKET_LEFT: Self = Self(b'[' as u16);
+    pub const BRACKET_RIGHT: Self = Self(b']' as u16);
+    pub const MINUS: Self = Self(b'-' as u16);
+    pub const EQUAL: Self = Self(b'=' as u16);
+    pub const GRAVE: Self = Self(b'`' as u16);
+    pub const BACKSLASH: Self = Self(b'\\' as u16);
+
+    // Common ASCII letter/digit helpers (uppercase code points for layout-normalized bindings)
     pub const fn from_ascii_upper(ch: u8) -> Self {
         Self(ch as u16)
+    }
+
+    pub const fn from_ascii_digit(ch: u8) -> Self {
+        Self(ch as u16)
+    }
+
+    /// Converts an ASCII letter/digit/punctuation keycode into its printable character.
+    pub const fn to_ascii_char(self, shift: bool) -> Option<char> {
+        match self.0 {
+            0x41..=0x5A => {
+                let b = self.0 as u8;
+                if shift {
+                    Some(b as char)
+                } else {
+                    Some((b + 32) as char)
+                }
+            }
+            0x30..=0x39 => Some((self.0 as u8) as char),
+            _ => None,
+        }
     }
 
     /// Returns the raw numeric keycode value (for in-memory matching only; never log).

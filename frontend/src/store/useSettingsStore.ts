@@ -13,13 +13,17 @@ import {
   ipcCheckForUpdates,
   ipcGetConfig,
   ipcGetMonitors,
+  ipcGetPermissions,
   ipcGetPlatformInfo,
+  ipcOpenAccessibilitySettings,
   ipcOpenExternalUrl,
+  ipcRequestPermissions,
   ipcResetSettingKey,
   ipcUpdateConfig,
 } from '../ipc/tauriBridge';
 import type {
   MonitorInfo,
+  PermissionStatus,
   PlatformInfo,
   PlatformOs,
   RatPoisonConfig,
@@ -37,6 +41,7 @@ export interface ContextMenuState {
 
 export interface SettingsStoreState {
   platform: PlatformInfo;
+  permissions: PermissionStatus | null;
   defaultConfig: RatPoisonConfig;
   config: RatPoisonConfig;
   monitors: MonitorInfo[];
@@ -62,6 +67,9 @@ export interface SettingsStoreState {
   openContextMenu: (x: number, y: number, settingPath: string, settingLabel: string) => void;
   closeContextMenu: () => void;
 
+  refreshPermissions: () => Promise<void>;
+  requestPermissions: () => Promise<void>;
+  openAccessibilitySettings: () => Promise<void>;
   checkForUpdates: (options?: { silent?: boolean }) => Promise<void>;
   openExternalUrl: (url: string) => Promise<void>;
   clearFeedback: () => void;
@@ -89,6 +97,7 @@ function scheduleToastClear(set: (partial: Partial<SettingsStoreState>) => void)
 
 export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   platform: initialPlatform,
+  permissions: null,
   defaultConfig: structuredClone(DEFAULT_CONFIG),
   config: structuredClone(DEFAULT_CONFIG),
   monitors: [],
@@ -115,11 +124,12 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
         ...getDefaultConfigForOs(platform.os),
         keybindings: { ...platform.defaultKeybindings },
       };
-      const [config, monitors] = await Promise.all([
+      const [config, monitors, permissions] = await Promise.all([
         ipcGetConfig(defaultConfig),
         ipcGetMonitors(),
+        ipcGetPermissions(),
       ]);
-      set({ platform, defaultConfig, config, monitors, loading: false });
+      set({ platform, permissions, defaultConfig, config, monitors, loading: false });
     } catch (err) {
       set({
         loading: false,
@@ -287,6 +297,42 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
     } catch (err) {
       set({
         errorMessage: err instanceof Error ? err.message : 'Failed to open external link',
+      });
+    }
+  },
+
+  refreshPermissions: async () => {
+    try {
+      const permissions = await ipcGetPermissions();
+      set({ permissions });
+    } catch {
+      // Ignore background permission poll failures
+    }
+  },
+
+  requestPermissions: async () => {
+    try {
+      const permissions = await ipcRequestPermissions();
+      set({
+        permissions,
+        toastMessage: permissions.hookActive
+          ? 'Global hotkey hook is active'
+          : 'Enable RatPoison in Privacy & Security → Accessibility',
+      });
+      scheduleToastClear(set);
+    } catch (err) {
+      set({
+        errorMessage: err instanceof Error ? err.message : 'Failed to request permissions',
+      });
+    }
+  },
+
+  openAccessibilitySettings: async () => {
+    try {
+      await ipcOpenAccessibilitySettings();
+    } catch (err) {
+      set({
+        errorMessage: err instanceof Error ? err.message : 'Failed to open Accessibility settings',
       });
     }
   },

@@ -17,6 +17,7 @@ import {
   type MonitorInfo,
   type OverlayMode,
   type OverlayStatePayload,
+  type PermissionStatus,
   type PlatformInfo,
   type RatPoisonConfig,
   type UpdateCheckResult,
@@ -187,6 +188,42 @@ export async function ipcOpenExternalUrl(url: string): Promise<void> {
     return;
   }
   await invoke<void>(TAURI_COMMANDS.OPEN_EXTERNAL_URL, { url });
+}
+
+export async function ipcGetOverlayState(): Promise<OverlayStatePayload | null> {
+  if (!isTauriRuntime()) return null;
+  return invoke<OverlayStatePayload>(TAURI_COMMANDS.GET_OVERLAY_STATE);
+}
+
+export async function ipcGetPermissions(): Promise<PermissionStatus> {
+  if (!isTauriRuntime()) {
+    return {
+      platform: detectClientOs(),
+      accessibilityGranted: true,
+      inputMonitoringGranted: true,
+      secureInputActive: false,
+      hookActive: true,
+      hookBackend: 'Browser Preview',
+    };
+  }
+  return invoke<PermissionStatus>(TAURI_COMMANDS.GET_PERMISSIONS);
+}
+
+export async function ipcRequestPermissions(): Promise<PermissionStatus> {
+  if (!isTauriRuntime()) {
+    return ipcGetPermissions();
+  }
+  return invoke<PermissionStatus>(TAURI_COMMANDS.REQUEST_PERMISSIONS);
+}
+
+export async function ipcOpenAccessibilitySettings(): Promise<void> {
+  if (!isTauriRuntime()) return;
+  await invoke<void>(TAURI_COMMANDS.OPEN_ACCESSIBILITY_SETTINGS);
+}
+
+export async function ipcToggleOverlayMode(mode: 'grid' | 'label' | 'free' | 'idle'): Promise<OverlayStatePayload | null> {
+  if (!isTauriRuntime()) return null;
+  return invoke<OverlayStatePayload>(TAURI_COMMANDS.TOGGLE_OVERLAY_MODE, { mode });
 }
 
 // ---------------------------------------------------------------------------

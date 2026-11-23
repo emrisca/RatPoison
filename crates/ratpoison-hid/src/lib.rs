@@ -26,7 +26,8 @@ pub use memory_hygiene::{
 };
 pub use platform::{
     check_platform_permissions, create_platform_keyboard_hook, create_platform_mouse_simulator,
-    KeyEventCallback, KeyboardHookBackend, MockHidBackend, MockMouseOp, MouseSimulatorBackend,
+    request_platform_permissions, KeyEventCallback, KeyboardHookBackend, MockHidBackend,
+    MockMouseOp, MouseSimulatorBackend,
 };
 pub use types::{
     ClickKind, HidError, KeyCode, KeyPhase, LogicalPoint, LogicalRect, Modifiers, MouseButton,

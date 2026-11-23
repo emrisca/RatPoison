@@ -215,6 +215,17 @@ export interface PlatformInfo {
   defaultKeybindings: RatPoisonConfig['keybindings'];
 }
 
+export interface PermissionStatus {
+  platform: string;
+  accessibilityGranted: boolean;
+  inputMonitoringGranted: boolean;
+  secureInputActive: boolean;
+  hookActive: boolean;
+  hookBackend: string;
+  guidance?: string;
+  lastError?: string;
+}
+
 export interface UpdateCheckResult {
   currentVersion: string;
   latestVersion: string;
@@ -246,6 +257,11 @@ export const TAURI_COMMANDS = {
   RESET_SETTING_KEY: 'reset_setting_key',
   GET_MONITORS: 'get_monitors',
   GET_PLATFORM_INFO: 'get_platform_info',
+  GET_OVERLAY_STATE: 'get_overlay_state',
+  GET_PERMISSIONS: 'get_permissions',
+  REQUEST_PERMISSIONS: 'request_permissions',
+  OPEN_ACCESSIBILITY_SETTINGS: 'open_accessibility_settings',
   CHECK_FOR_UPDATES: 'check_for_updates',
   OPEN_EXTERNAL_URL: 'open_external_url',
+  TOGGLE_OVERLAY_MODE: 'toggle_overlay_mode',
 } as const;

@@ -10,8 +10,8 @@ use ratpoison_a11y::{
     LabelConfig, LogicalRect as A11yRect,
 };
 use ratpoison_core::{
-    CoreEngine, EngineEffect, EngineEvent, LabelBadge as CoreLabelBadge, LogicalPoint, LogicalRect,
-    MonitorInfo, MonitorLayout, MouseButton as CoreMouseButton, PhysicalPoint,
+    CoreEngine, EngineEffect, EngineEvent, EngineMode, LabelBadge as CoreLabelBadge, LogicalPoint,
+    LogicalRect, MonitorInfo, MonitorLayout, MouseButton as CoreMouseButton, PhysicalPoint,
 };
 use ratpoison_hid::{
     check_platform_permissions, create_platform_mouse_simulator, ClickKind, CommandInterceptor,
@@ -27,6 +27,8 @@ pub struct AppRuntime {
     pub mouse_sim: Box<dyn MouseSimulatorBackend>,
     pub a11y_provider: Box<dyn AccessibilityProvider>,
     pub permissions: PermissionReport,
+    pub active_free_directions: Vec<String>,
+    pub free_scroll_active: bool,
 }
 
 impl AppRuntime {
@@ -66,6 +68,8 @@ impl AppRuntime {
             mouse_sim,
             a11y_provider,
             permissions,
+            active_free_directions: Vec::new(),
+            free_scroll_active: false,
         }
     }
 
@@ -84,9 +88,38 @@ impl AppRuntime {
 
     pub fn sync_core_config_from_store(&mut self) {
         let updated = self.config_store.to_core_config();
-        let _ = self
-            .engine
-            .handle_event(EngineEvent::ConfigUpdated { config: Box::new(updated) });
+        let _ = self.engine.handle_event(EngineEvent::ConfigUpdated {
+            config: Box::new(updated),
+        });
+    }
+
+    /// Reads the live OS cursor position and syncs it into `CoreEngine` so overlays open on
+    /// the cursor's active monitor and Free Mode glides from the actual pointer location.
+    pub fn sync_live_cursor(&mut self) {
+        if let Ok(pt) = self.mouse_sim.cursor_position() {
+            let _ = self.engine.handle_event(EngineEvent::SyncCursor {
+                logical: LogicalPoint::new(pt.x, pt.y),
+            });
+        }
+    }
+
+    pub fn current_overlay_payload(&self) -> OverlayStatePayloadDto {
+        let mut payload =
+            project_snapshot_to_overlay_payload(&self.engine.snapshot(), self.engine.config());
+        self.enrich_free_mode_payload(&mut payload);
+        payload
+    }
+
+    fn enrich_free_mode_payload(&self, payload: &mut OverlayStatePayloadDto) {
+        if self.engine.mode() == EngineMode::FreeMode {
+            if self.config_store.show_free_mode_hud() {
+                payload.visible = true;
+            }
+            if let Some(ref mut fm) = payload.free_mode {
+                fm.active_directions = self.active_free_directions.clone();
+                fm.scroll_mode = self.free_scroll_active;
+            }
+        }
     }
 
     fn scale_for_monitor(&self, monitor_id: &str) -> f64 {
@@ -104,9 +137,16 @@ impl AppRuntime {
         event: EngineEvent,
         app: Option<&AppHandle>,
     ) -> OverlayStatePayloadDto {
+        if matches!(
+            event,
+            EngineEvent::ActivateGrid { .. }
+                | EngineEvent::ActivateFreeMode { .. }
+                | EngineEvent::ActivateLabelMode
+        ) {
+            self.sync_live_cursor();
+        }
+
         let step = self.engine.handle_event(event);
-        let mut latest_payload =
-            project_snapshot_to_overlay_payload(&step.snapshot, self.engine.config());
 
         for effect in step.effects {
             match effect {
@@ -171,10 +211,21 @@ impl AppRuntime {
                     }
                 }
                 EngineEffect::HideOverlay => {
-                    if let Some(handle) = app {
-                        if let Some(win) = handle.get_webview_window("overlay") {
-                            let _ = win.hide();
+                    if self.engine.mode() == EngineMode::FreeMode
+                        && self.config_store.show_free_mode_hud()
+                    {
+                        if let Some(handle) = app {
+                            let active_mon = self
+                                .engine
+                                .snapshot()
+                                .active_monitor
+                                .or_else(|| self.engine.layout().primary().cloned());
+                            if let Some(mon) = active_mon {
+                                position_and_show_overlay(handle, &mon);
+                            }
                         }
+                    } else if let Some(handle) = app {
+                        hide_overlay_window(handle);
                     }
                 }
                 EngineEffect::QueryAccessibility { monitor_id } => {
@@ -185,9 +236,12 @@ impl AppRuntime {
                         .or_else(|| self.engine.layout().primary())
                         .cloned();
                     if let Some(mon) = active_mon {
-                        if let Ok(a11y_snap) =
-                            self.a11y_provider.snapshot(&AccessibilityBudget::default())
-                        {
+                        let a11y_budget = AccessibilityBudget {
+                            max_depth: 24,
+                            max_nodes: 2000,
+                            timeout: std::time::Duration::from_millis(200),
+                        };
+                        if let Ok(a11y_snap) = self.a11y_provider.snapshot(&a11y_budget) {
                             let cfg = LabelConfig {
                                 viewport: A11yRect::new(
                                     mon.logical_rect.x,
@@ -217,14 +271,10 @@ impl AppRuntime {
                                     monitor_id: mon.id.clone(),
                                 })
                                 .collect();
-                            let follow = self.engine.handle_event(
+                            let _ = self.engine.handle_event(
                                 EngineEvent::AccessibilityLabelsLoaded {
                                     badges: core_badges,
                                 },
-                            );
-                            latest_payload = project_snapshot_to_overlay_payload(
-                                &follow.snapshot,
-                                self.engine.config(),
                             );
                         }
                     }
@@ -232,12 +282,20 @@ impl AppRuntime {
                 EngineEffect::ClearKeyBuffer => {
                     let _ = self.interceptor.deactivate();
                 }
-                EngineEffect::EmitOverlaySnapshot { snapshot } => {
-                    latest_payload =
-                        project_snapshot_to_overlay_payload(&snapshot, self.engine.config());
-                }
+                EngineEffect::EmitOverlaySnapshot { .. } => {}
             }
         }
+
+        // Always project from the authoritative post-effect engine snapshot so follow-up events
+        // (such as `AccessibilityLabelsLoaded`) are never overwritten by an earlier `EmitOverlaySnapshot`.
+        let mut latest_payload =
+            project_snapshot_to_overlay_payload(&self.engine.snapshot(), self.engine.config());
+
+        if self.engine.mode() != EngineMode::FreeMode {
+            self.active_free_directions.clear();
+            self.free_scroll_active = false;
+        }
+        self.enrich_free_mode_payload(&mut latest_payload);
 
         if let Some(handle) = app {
             let _ = handle.emit(EVENT_OVERLAY_STATE, &latest_payload);
@@ -255,16 +313,28 @@ fn map_mouse_button(btn: CoreMouseButton) -> HidMouseButton {
 }
 
 fn position_and_show_overlay(app: &AppHandle, monitor: &MonitorInfo) {
-    if let Some(overlay) = app.get_webview_window("overlay") {
-        let _ = overlay.set_ignore_cursor_events(true);
-        let _ = overlay.set_position(LogicalPosition::new(
-            monitor.logical_rect.x,
-            monitor.logical_rect.y,
-        ));
-        let _ = overlay.set_size(LogicalSize::new(
-            monitor.logical_rect.width,
-            monitor.logical_rect.height,
-        ));
-        let _ = overlay.show();
-    }
+    let app_handle = app.clone();
+    let x = monitor.logical_rect.x;
+    let y = monitor.logical_rect.y;
+    let w = monitor.logical_rect.width;
+    let h = monitor.logical_rect.height;
+    let _ = app.run_on_main_thread(move || {
+        if let Some(overlay) = app_handle.get_webview_window("overlay") {
+            let _ = overlay.set_ignore_cursor_events(true);
+            let _ = overlay.set_always_on_top(true);
+            let _ = overlay.set_visible_on_all_workspaces(true);
+            let _ = overlay.set_position(LogicalPosition::new(x, y));
+            let _ = overlay.set_size(LogicalSize::new(w, h));
+            let _ = overlay.show();
+        }
+    });
+}
+
+fn hide_overlay_window(app: &AppHandle) {
+    let app_handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(overlay) = app_handle.get_webview_window("overlay") {
+            let _ = overlay.hide();
+        }
+    });
 }
