@@ -175,6 +175,15 @@ jobs:
           prerelease: ${{ needs.verify.outputs.prerelease == 'true' }}
           args: ${{ matrix.args }}
 
+      - name: Verify macOS bundle code signature
+        if: matrix.platform == 'macos-latest'
+        run: |
+          APP_PATH="src-tauri/target/universal-apple-darwin/release/bundle/macos/RatPoison.app"
+          codesign -dvvv "$APP_PATH" 2>&1 | tee /tmp/codesign.log
+          grep -q "Identifier=io.github.emrisca.RatPoison" /tmp/codesign.log
+          grep -q "Info.plist entries=" /tmp/codesign.log
+          test -f "$APP_PATH/Contents/_CodeSignature/CodeResources"
+
   publish-release:
     name: Publish GitHub Release
     needs: [verify, build-tauri]
