@@ -477,9 +477,9 @@ impl KeyboardHookBackend for MacOsKeyboardHook {
         let input_monitoring_granted = is_input_monitoring_granted();
         let secure_input_active = is_secure_event_input_enabled();
 
-        let guidance = if !accessibility_granted || !input_monitoring_granted {
+        let guidance = if !accessibility_granted {
             Some(
-                "Grant Accessibility and Input Monitoring to RatPoison in System Settings -> Privacy & Security."
+                "Grant Accessibility to RatPoison in System Settings -> Privacy & Security -> Accessibility. If RatPoison was already enabled from an older version, click Grant Permission to reset the stale macOS entry and toggle it back on."
                     .to_string(),
             )
         } else if secure_input_active {

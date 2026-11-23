@@ -21,6 +21,7 @@ import {
   type PlatformInfo,
   type RatPoisonConfig,
   type UpdateCheckResult,
+  type UpdateStatus,
 } from '../types/ipc';
 
 /** Detect whether we are executing inside a Tauri v2 WebView runtime. */
@@ -182,6 +183,32 @@ export async function ipcCheckForUpdates(channel: string): Promise<UpdateCheckRe
   return invoke<UpdateCheckResult>(TAURI_COMMANDS.CHECK_FOR_UPDATES, { channel });
 }
 
+export async function ipcGetUpdateStatus(): Promise<UpdateStatus> {
+  if (!isTauriRuntime()) {
+    return {
+      state: 'idle',
+      currentVersion: '0.1.2',
+      downloadedBytes: 0,
+      autoInstall: true,
+    };
+  }
+  return invoke<UpdateStatus>(TAURI_COMMANDS.GET_UPDATE_STATUS);
+}
+
+export async function ipcInstallUpdate(channel?: 'stable' | 'beta'): Promise<UpdateStatus> {
+  if (!isTauriRuntime()) {
+    return {
+      state: 'upToDate',
+      currentVersion: '0.1.2',
+      latestVersion: '0.1.2',
+      downloadedBytes: 0,
+      message: 'In-app automatic installation runs inside the desktop app.',
+      autoInstall: true,
+    };
+  }
+  return invoke<UpdateStatus>(TAURI_COMMANDS.INSTALL_UPDATE, { channel });
+}
+
 export async function ipcOpenExternalUrl(url: string): Promise<void> {
   if (!isTauriRuntime()) {
     window.open(url, '_blank', 'noopener,noreferrer');
@@ -249,6 +276,17 @@ export async function subscribeConfigUpdated(
   }
   return listen<Partial<RatPoisonConfig>>(TAURI_EVENTS.CONFIG_UPDATED, (event) => {
     handler(deepMergeDefaults(DEFAULT_CONFIG, event.payload));
+  });
+}
+
+export async function subscribeUpdateStatus(
+  handler: (status: UpdateStatus) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriRuntime()) {
+    return () => {};
+  }
+  return listen<UpdateStatus>(TAURI_EVENTS.UPDATE_STATUS, (event) => {
+    handler(event.payload);
   });
 }
 

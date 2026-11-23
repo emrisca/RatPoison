@@ -13,6 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const EVENT_OVERLAY_STATE: &str = "ratpoison://overlay-state";
 pub const EVENT_CONFIG_UPDATED: &str = "ratpoison://config-updated";
+pub const EVENT_UPDATE_STATUS: &str = "ratpoison://update-status";
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -252,6 +253,45 @@ pub struct UpdateCheckResultDto {
     pub release_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub asset_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateStatusDto {
+    /// `"idle" | "checking" | "available" | "downloading" | "installing" | "ready" | "upToDate" | "error"`
+    pub state: String,
+    pub current_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_version: Option<String>,
+    pub downloaded_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub percent: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_notes: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    pub auto_install: bool,
+}
+
+impl UpdateStatusDto {
+    pub fn idle(current_version: &str, auto_install: bool) -> Self {
+        Self {
+            state: "idle".to_string(),
+            current_version: current_version.to_string(),
+            latest_version: None,
+            downloaded_bytes: 0,
+            total_bytes: None,
+            percent: None,
+            release_notes: None,
+            published_at: None,
+            message: None,
+            auto_install,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -592,7 +632,7 @@ pub fn default_frontend_config_json_for_os(os: &str) -> Value {
         "updates": {
             "channel": "stable",
             "autoCheck": true,
-            "autoDownload": false
+            "autoDownload": true
         }
     })
 }
@@ -743,6 +783,26 @@ impl ConfigStore {
             .filter(|s| !s.is_empty())
             .unwrap_or("asdfghjklqwertyuiopzxcvbnm")
             .to_string()
+    }
+
+    pub fn update_channel(&self) -> String {
+        get_json_path(&self.raw_json, "updates.channel")
+            .and_then(Value::as_str)
+            .filter(|s| s.eq_ignore_ascii_case("beta") || s.eq_ignore_ascii_case("stable"))
+            .unwrap_or("stable")
+            .to_ascii_lowercase()
+    }
+
+    pub fn auto_check_updates(&self) -> bool {
+        get_json_path(&self.raw_json, "updates.autoCheck")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+    }
+
+    pub fn auto_install_updates(&self) -> bool {
+        get_json_path(&self.raw_json, "updates.autoDownload")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
     }
 
     pub fn update_and_save(&mut self, incoming: Value) -> Result<Value, String> {

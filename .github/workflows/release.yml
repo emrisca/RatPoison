@@ -163,10 +163,12 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           NO_STRIP: "true"
         with:
           projectPath: .
-          includeUpdaterJson: false
+          includeUpdaterJson: true
           tagName: ${{ needs.verify.outputs.tag }}
           releaseName: "RatPoison ${{ needs.verify.outputs.tag }}"
           releaseDraft: true
@@ -178,6 +180,65 @@ jobs:
     needs: [verify, build-tauri]
     runs-on: ubuntu-22.04
     steps:
+      - name: Ensure latest.json includes all built platform signatures
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.verify.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, subprocess, tempfile
+          from pathlib import Path
+
+          tag = os.environ["TAG"]
+          repo = os.environ["REPO"]
+          version = tag.lstrip("vV")
+
+          with tempfile.TemporaryDirectory() as tmp:
+              tmp_dir = Path(tmp)
+              subprocess.run(
+                  ["gh", "release", "download", tag, "--repo", repo, "--pattern", "latest.json", "--pattern", "*.sig", "--dir", str(tmp_dir)],
+                  check=False,
+              )
+              manifest_path = tmp_dir / "latest.json"
+              if manifest_path.exists():
+                  manifest = json.loads(manifest_path.read_text())
+              else:
+                  manifest = {"version": version, "notes": f"RatPoison {tag}", "platforms": {}}
+
+              platforms = manifest.setdefault("platforms", {})
+              base_url = f"https://github.com/{repo}/releases/download/{tag}"
+
+              for sig_file in sorted(tmp_dir.glob("*.sig")):
+                  sig_text = sig_file.read_text().strip()
+                  asset_name = sig_file.name[:-4]
+                  lower = asset_name.lower()
+                  entry = {"signature": sig_text, "url": f"{base_url}/{asset_name}"}
+
+                  if lower.endswith(".app.tar.gz"):
+                      if "universal" in lower:
+                          platforms.setdefault("darwin-aarch64", entry)
+                          platforms.setdefault("darwin-x86_64", entry)
+                      elif "aarch64" in lower or "arm64" in lower:
+                          platforms.setdefault("darwin-aarch64", entry)
+                      else:
+                          platforms.setdefault("darwin-x86_64", entry)
+                  elif lower.endswith("-setup.exe"):
+                      platforms.setdefault("windows-x86_64", entry)
+                  elif lower.endswith(".msi") and "windows-x86_64" not in platforms:
+                      platforms["windows-x86_64"] = entry
+                  elif lower.endswith(".appimage"):
+                      platforms.setdefault("linux-x86_64", entry)
+
+              manifest["version"] = version
+              manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+              print("Verified latest.json platforms:", sorted(platforms.keys()))
+              subprocess.run(
+                  ["gh", "release", "upload", tag, str(manifest_path), "--repo", repo, "--clobber"],
+                  check=True,
+              )
+          PYEOF
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

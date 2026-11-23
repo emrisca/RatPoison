@@ -13,8 +13,9 @@ use crate::bridge::AppRuntime;
 use crate::hotkeys::{HookAction, HookRouteConfig, HookRouter};
 use crate::ipc::{
     MonitorDto, OverlayStatePayloadDto, PermissionStatusDto, PlatformInfoDto, UpdateCheckResultDto,
-    EVENT_CONFIG_UPDATED,
+    UpdateStatusDto, EVENT_CONFIG_UPDATED,
 };
+use crate::updater::SharedUpdater;
 use ratpoison_core::{EngineEvent, EngineMode, LogicalRect, MonitorInfo, MonitorLayout, PhysicalPoint};
 use ratpoison_hid::{
     check_platform_permissions, create_platform_keyboard_hook, request_platform_permissions,
@@ -387,6 +388,24 @@ fn get_permissions(hook: State<'_, SharedHook>) -> Result<PermissionStatusDto, S
 
 #[tauri::command]
 fn request_permissions(hook: State<'_, SharedHook>) -> Result<PermissionStatusDto, String> {
+    #[cfg(target_os = "macos")]
+    {
+        // Upgrades of ad-hoc signed macOS builds change the binary cdhash while leaving a stale
+        // TCC entry toggled ON in System Settings. Resetting the stale entry before prompting
+        // ensures macOS registers the running binary as soon as the user re-enables it.
+        let perms = check_platform_permissions();
+        if !perms.accessibility_granted {
+            let _ = std::process::Command::new("tccutil")
+                .args(["reset", "Accessibility", "io.github.emrisca.RatPoison"])
+                .status();
+        }
+        if !perms.input_monitoring_granted {
+            let _ = std::process::Command::new("tccutil")
+                .args(["reset", "ListenEvent", "io.github.emrisca.RatPoison"])
+                .status();
+        }
+    }
+
     let _ = request_platform_permissions();
     let mut ctrl = hook.0.lock().map_err(|_| "hook lock poisoned".to_string())?;
     let _ = ctrl.ensure_started();
@@ -414,6 +433,64 @@ async fn check_for_updates(channel: String) -> Result<UpdateCheckResultDto, Stri
     tauri::async_runtime::spawn_blocking(move || updater::check_github_releases(&channel))
         .await
         .map_err(|err| format!("Update check task failed: {err}"))?
+}
+
+#[tauri::command]
+fn get_update_status(updater: State<'_, SharedUpdater>) -> UpdateStatusDto {
+    updater.current_status()
+}
+
+#[tauri::command]
+async fn install_update(
+    app: AppHandle,
+    state: State<'_, SharedRuntime>,
+    channel: Option<String>,
+) -> Result<UpdateStatusDto, String> {
+    let (default_channel, auto_install) = state
+        .0
+        .lock()
+        .map(|rt| {
+            (
+                rt.config_store.update_channel(),
+                rt.config_store.auto_install_updates(),
+            )
+        })
+        .unwrap_or_else(|_| ("stable".to_string(), true));
+    let resolved_channel = channel.unwrap_or(default_channel);
+    updater::run_in_app_update(app, resolved_channel, true, auto_install).await
+}
+
+fn spawn_auto_updater_loop(app_handle: AppHandle, runtime: Arc<Mutex<AppRuntime>>) {
+    let _ = std::thread::Builder::new()
+        .name("ratpoison-auto-updater".to_string())
+        .spawn(move || {
+            // Wait briefly after startup so the app finishes launching before hitting the network.
+            std::thread::sleep(Duration::from_secs(5));
+            loop {
+                let (auto_check, auto_install, channel) = runtime
+                    .lock()
+                    .map(|rt| {
+                        (
+                            rt.config_store.auto_check_updates(),
+                            rt.config_store.auto_install_updates(),
+                            rt.config_store.update_channel(),
+                        )
+                    })
+                    .unwrap_or_else(|_| (true, true, "stable".to_string()));
+
+                if auto_check {
+                    let _ = tauri::async_runtime::block_on(updater::run_in_app_update(
+                        app_handle.clone(),
+                        channel,
+                        auto_install,
+                        auto_install,
+                    ));
+                }
+
+                // Re-check every 6 hours while running in the background.
+                std::thread::sleep(Duration::from_secs(6 * 60 * 60));
+            }
+        });
 }
 
 #[tauri::command]
@@ -463,6 +540,8 @@ pub fn run() {
     let _ = ratpoison_hid::harden_process_memory();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let handle = app.handle();
 
@@ -476,6 +555,7 @@ pub fn run() {
             let monitors = query_tauri_monitors(handle);
             let runtime_inner = AppRuntime::initialize(monitors);
             let route_cfg = HookRouteConfig::from_config_json(runtime_inner.config_store.json());
+            let auto_install_initial = runtime_inner.config_store.auto_install_updates();
 
             let runtime = Arc::new(Mutex::new(runtime_inner));
             let router = Arc::new(Mutex::new(HookRouter::new(route_cfg)));
@@ -493,8 +573,11 @@ pub fn run() {
             );
             spawn_permission_watcher(Arc::clone(&hook_arc));
 
-            app.manage(SharedRuntime(runtime));
+            app.manage(SharedUpdater::new(auto_install_initial));
+            app.manage(SharedRuntime(Arc::clone(&runtime)));
             app.manage(SharedHook(hook_arc));
+
+            spawn_auto_updater_loop(handle.clone(), runtime);
 
             // Wire native system tray / menu bar menu onto `ratpoison-tray`.
             if let Some(tray) = app.tray_by_id("ratpoison-tray") {
@@ -505,6 +588,8 @@ pub fn run() {
                     MenuItemBuilder::with_id("toggle-free", "Toggle Free Mode").build(app)?;
                 let settings_item =
                     MenuItemBuilder::with_id("open-settings", "Settings…").build(app)?;
+                let check_updates_item =
+                    MenuItemBuilder::with_id("check-updates", "Check for Updates…").build(app)?;
                 let quit_item = MenuItemBuilder::with_id("quit", "Quit RatPoison").build(app)?;
 
                 let menu = MenuBuilder::new(app)
@@ -513,6 +598,7 @@ pub fn run() {
                     .item(&free_item)
                     .separator()
                     .item(&settings_item)
+                    .item(&check_updates_item)
                     .separator()
                     .item(&quit_item)
                     .build()?;
@@ -582,6 +668,30 @@ pub fn run() {
                         }
                     }
                     "open-settings" => open_settings_window(app_handle),
+                    "check-updates" => {
+                        open_settings_window(app_handle);
+                        let handle_clone = app_handle.clone();
+                        let (channel, auto_install) = app_handle
+                            .try_state::<SharedRuntime>()
+                            .and_then(|rt| {
+                                rt.0.lock().ok().map(|g| {
+                                    (
+                                        g.config_store.update_channel(),
+                                        g.config_store.auto_install_updates(),
+                                    )
+                                })
+                            })
+                            .unwrap_or_else(|| ("stable".to_string(), true));
+                        tauri::async_runtime::spawn(async move {
+                            let _ = updater::run_in_app_update(
+                                handle_clone,
+                                channel,
+                                auto_install,
+                                auto_install,
+                            )
+                            .await;
+                        });
+                    }
                     "quit" => app_handle.exit(0),
                     _ => {}
                 });
@@ -602,6 +712,8 @@ pub fn run() {
             request_permissions,
             open_accessibility_settings,
             check_for_updates,
+            get_update_status,
+            install_update,
             open_external_url,
             toggle_overlay_mode,
         ])

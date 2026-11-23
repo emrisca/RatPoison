@@ -194,29 +194,25 @@
 }
 
 .rp-reset-all-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  width: 100%;
-  padding: 7px 10px;
+  align-self: flex-start;
+  gap: 5px;
+  padding: 3px 4px;
   border-radius: var(--rp-radius-sm);
-  border: 1px solid var(--rp-border-subtle);
+  border: none;
   background: transparent;
-  color: var(--rp-text-secondary);
-  font-size: 12px;
+  color: var(--rp-text-muted);
+  font-size: 11.5px;
+  font-weight: 500;
   cursor: pointer;
+  transition: color var(--rp-duration-fast);
 }
 
-.rp-reset-all-btn:hover:not(:disabled) {
-  border-color: var(--rp-danger);
+.rp-reset-all-btn:hover {
   color: var(--rp-danger);
-  background: var(--rp-danger-soft);
-}
-
-.rp-reset-all-btn:disabled {
-  opacity: 0.42;
-  cursor: not-allowed;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .rp-confirm-reset {
@@ -320,11 +316,6 @@
   color: var(--rp-accent);
 }
 
-.rp-section-hint {
-  font-size: 11px;
-  color: var(--rp-text-muted);
-}
-
 .rp-section-desc {
   margin: 6px 0 12px;
   font-size: 12.5px;
@@ -372,15 +363,21 @@
 }
 
 .rp-modified-dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   padding: 0;
   border: none;
   border-radius: 0;
   background: var(--rp-modified-dot);
-  box-shadow: 0 0 0 2px var(--rp-modified-soft);
+  opacity: 0.78;
   cursor: pointer;
   flex-shrink: 0;
+  transition: opacity var(--rp-duration-fast), box-shadow var(--rp-duration-fast);
+}
+
+.rp-modified-dot:hover {
+  opacity: 1;
+  box-shadow: 0 0 0 2px var(--rp-modified-soft);
 }
 
 .rp-setting-label {
@@ -418,12 +415,6 @@
   color: var(--rp-accent);
   padding: 0 2px;
   border-radius: 0;
-}
-
-.rp-search-hint-bar {
-  font-size: 11.5px;
-  color: var(--rp-text-muted);
-  margin-bottom: 8px;
 }
 
 /* Controls */
@@ -657,6 +648,21 @@
 .rp-btn--ghost:hover:not(:disabled) {
   border-color: var(--rp-danger);
   color: var(--rp-danger);
+}
+
+.rp-btn--quiet {
+  padding: 5px 8px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--rp-text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  transition: color var(--rp-duration-fast), background var(--rp-duration-fast);
+}
+
+.rp-btn--quiet:hover:not(:disabled) {
+  background: var(--rp-bg-hover);
+  color: var(--rp-text-primary);
 }
 
 /* Live Appearance Mini-Preview */

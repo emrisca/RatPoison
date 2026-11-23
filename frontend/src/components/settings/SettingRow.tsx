@@ -1,10 +1,5 @@
 import type { MouseEvent, ReactNode } from 'react';
-import {
-  SETTING_MAP,
-  formatSettingValue,
-  getByPath,
-  isModifiedPath,
-} from '../../config/defaults';
+import { SETTING_MAP, isModifiedPath } from '../../config/defaults';
 import { useSettingsStore } from '../../store/useSettingsStore';
 
 interface SettingRowProps {
@@ -30,8 +25,8 @@ function HighlightText({ text, query }: { text: string; query?: string }) {
 
 /**
  * Standard wrapper for every Settings control.
- * - Shows a luminous "modified" dot whenever the current value differs from DEFAULT_CONFIG.
- * - Attaches right-click context menu for instant "Restore Default" (`reset_setting_key`).
+ * - Shows a subtle "modified" dot whenever the current value differs from DEFAULT_CONFIG.
+ * - Attaches right-click context menu for quiet "Restore Default" (`reset_setting_key`).
  */
 export function SettingRow({ path, children, highlightQuery, badgeText }: SettingRowProps) {
   const config = useSettingsStore((s) => s.config);
@@ -43,7 +38,6 @@ export function SettingRow({ path, children, highlightQuery, badgeText }: Settin
   const label = descriptor?.label ?? path;
   const description = descriptor?.description ?? '';
   const modified = isModifiedPath(config, path, defaultConfig);
-  const defaultVal = getByPath(defaultConfig, path);
 
   const handleContextMenu = (e: MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -62,7 +56,7 @@ export function SettingRow({ path, children, highlightQuery, badgeText }: Settin
             <button
               type="button"
               className="rp-modified-dot"
-              title={`Modified (default: ${formatSettingValue(defaultVal)}) — click or right-click to restore`}
+              title="Modified — click to reset"
               aria-label={`Restore ${label} to default`}
               onClick={() => void resetSettingKey(path)}
             />

@@ -144,7 +144,7 @@ const BASE_DEFAULT_CONFIG: Omit<RatPoisonConfig, 'keybindings'> = {
   updates: {
     channel: 'stable',
     autoCheck: true,
-    autoDownload: false,
+    autoDownload: true,
   },
 };
 
@@ -307,7 +307,7 @@ export const SETTING_REGISTRY: SettingDescriptor[] = [
   // Updates
   { path: 'updates.channel', tab: 'updates', section: 'Release Channel', label: 'Update channel', description: 'Track Stable releases or opt into Beta builds.', keywords: ['stable', 'beta', 'release', 'channel'] },
   { path: 'updates.autoCheck', tab: 'updates', section: 'Automation', label: 'Check for updates automatically', description: 'Periodically check GitHub Releases on startup.', keywords: ['auto', 'check', 'updates'] },
-  { path: 'updates.autoDownload', tab: 'updates', section: 'Automation', label: 'Download updates in background', description: 'Pre-fetch release packages ready for restart.', keywords: ['download', 'background', 'updates'] },
+  { path: 'updates.autoDownload', tab: 'updates', section: 'Automation', label: 'Install updates automatically', description: 'Automatically download, verify, install, and restart into new releases without downloading installers manually.', keywords: ['download', 'install', 'automatic', 'background', 'updates'] },
 ];
 
 export const SETTING_MAP: Record<string, SettingDescriptor> = Object.fromEntries(

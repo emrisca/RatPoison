@@ -1,16 +1,48 @@
 //! Live GitHub Releases update checker and safe external link launcher.
 
-use crate::ipc::{detect_os, format_unix_iso8601, unix_timestamp_secs, UpdateCheckResultDto};
+use crate::ipc::{
+    detect_os, format_unix_iso8601, unix_timestamp_secs, UpdateCheckResultDto, UpdateStatusDto,
+    EVENT_UPDATE_STATUS,
+};
 use serde::Deserialize;
 use std::cmp::Ordering;
 use std::process::Command;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use tauri::{AppHandle, Emitter, Manager, Url};
+use tauri_plugin_updater::UpdaterExt;
 
 pub const GITHUB_REPO_OWNER: &str = "emrisca";
 pub const GITHUB_REPO_NAME: &str = "RatPoison";
 pub const GITHUB_RELEASES_PAGE_URL: &str = "https://github.com/emrisca/RatPoison/releases";
+pub const STABLE_UPDATER_MANIFEST_URL: &str =
+    "https://github.com/emrisca/RatPoison/releases/latest/download/latest.json";
 const GITHUB_RELEASES_API_URL: &str =
     "https://api.github.com/repos/emrisca/RatPoison/releases?per_page=15";
+
+#[derive(Debug, Clone)]
+pub struct UpdateManagerState {
+    pub status: UpdateStatusDto,
+    pub in_progress: bool,
+}
+
+pub struct SharedUpdater(pub Arc<Mutex<UpdateManagerState>>);
+
+impl SharedUpdater {
+    pub fn new(auto_install: bool) -> Self {
+        Self(Arc::new(Mutex::new(UpdateManagerState {
+            status: UpdateStatusDto::idle(env!("CARGO_PKG_VERSION"), auto_install),
+            in_progress: false,
+        })))
+    }
+
+    pub fn current_status(&self) -> UpdateStatusDto {
+        self.0
+            .lock()
+            .map(|g| g.status.clone())
+            .unwrap_or_else(|_| UpdateStatusDto::idle(env!("CARGO_PKG_VERSION"), true))
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct GitHubRelease {
@@ -371,6 +403,383 @@ pub fn open_external_url(url: &str) -> Result<(), String> {
         .map_err(|err| format!("Failed to open browser for {valid}: {err}"))
 }
 
+/// Selects the signed Tauri updater manifest (`latest.json`) URL for the chosen channel.
+pub fn select_updater_manifest_url_from_list(releases: &[GitHubRelease], channel_str: &str) -> String {
+    let channel = if channel_str.eq_ignore_ascii_case("beta") {
+        "beta"
+    } else {
+        "stable"
+    };
+
+    if channel == "stable" {
+        return STABLE_UPDATER_MANIFEST_URL.to_string();
+    }
+
+    releases
+        .iter()
+        .filter(|rel| !rel.draft)
+        .filter_map(|rel| {
+            let ver = SemVer::parse(&rel.tag_name)?;
+            let manifest = rel
+                .assets
+                .iter()
+                .find(|a| a.name.eq_ignore_ascii_case("latest.json"))?;
+            Some((ver, manifest.browser_download_url.clone()))
+        })
+        .max_by(|(a, _), (b, _)| a.cmp(b))
+        .map(|(_, url)| url)
+        .unwrap_or_else(|| STABLE_UPDATER_MANIFEST_URL.to_string())
+}
+
+/// Resolves the active `latest.json` endpoint URL for `stable` or `beta`.
+pub fn resolve_updater_manifest_url(channel_str: &str) -> String {
+    if !channel_str.eq_ignore_ascii_case("beta") {
+        return STABLE_UPDATER_MANIFEST_URL.to_string();
+    }
+
+    let current_version = env!("CARGO_PKG_VERSION");
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(10))
+        .build();
+    let user_agent = format!(
+        "RatPoison/{current_version} (+https://github.com/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME})"
+    );
+
+    match agent
+        .get(GITHUB_RELEASES_API_URL)
+        .set("User-Agent", &user_agent)
+        .set("Accept", "application/vnd.github+json")
+        .set("X-GitHub-Api-Version", "2022-11-28")
+        .call()
+    {
+        Ok(resp) => match resp.into_json::<Vec<GitHubRelease>>() {
+            Ok(releases) => select_updater_manifest_url_from_list(&releases, "beta"),
+            Err(_) => STABLE_UPDATER_MANIFEST_URL.to_string(),
+        },
+        Err(_) => STABLE_UPDATER_MANIFEST_URL.to_string(),
+    }
+}
+
+fn set_and_emit_status(app: &AppHandle, status: UpdateStatusDto) {
+    if let Some(shared) = app.try_state::<SharedUpdater>() {
+        if let Ok(mut guard) = shared.0.lock() {
+            guard.status = status.clone();
+        }
+    }
+    let _ = app.emit(EVENT_UPDATE_STATUS, &status);
+}
+
+fn finish_in_progress(app: &AppHandle) {
+    if let Some(shared) = app.try_state::<SharedUpdater>() {
+        if let Ok(mut guard) = shared.0.lock() {
+            guard.in_progress = false;
+        }
+    }
+}
+
+/// Checks the signed Tauri updater manifest and optionally downloads, verifies, installs
+/// in-place, and restarts RatPoison automatically.
+pub async fn run_in_app_update(
+    app: AppHandle,
+    channel: String,
+    install_now: bool,
+    auto_install: bool,
+) -> Result<UpdateStatusDto, String> {
+    let current_version = env!("CARGO_PKG_VERSION").to_string();
+    let is_flatpak = std::env::var_os("FLATPAK_ID").is_some()
+        || std::path::Path::new("/.flatpak-info").exists();
+
+    if is_flatpak {
+        let status = UpdateStatusDto {
+            state: "upToDate".to_string(),
+            current_version,
+            latest_version: None,
+            downloaded_bytes: 0,
+            total_bytes: None,
+            percent: None,
+            release_notes: None,
+            published_at: None,
+            message: Some(
+                "Flatpak builds update via `flatpak update io.github.emrisca.RatPoison`."
+                    .to_string(),
+            ),
+            auto_install,
+        };
+        set_and_emit_status(&app, status.clone());
+        return Ok(status);
+    }
+
+    // Prevent concurrent checks/installs from colliding.
+    if let Some(shared) = app.try_state::<SharedUpdater>() {
+        let mut guard = shared
+            .0
+            .lock()
+            .map_err(|_| "updater state lock poisoned".to_string())?;
+        if guard.in_progress {
+            return Ok(guard.status.clone());
+        }
+        guard.in_progress = true;
+    }
+
+    let checking_status = UpdateStatusDto {
+        state: "checking".to_string(),
+        current_version: current_version.clone(),
+        latest_version: None,
+        downloaded_bytes: 0,
+        total_bytes: None,
+        percent: None,
+        release_notes: None,
+        published_at: None,
+        message: Some("Checking for signed updates…".to_string()),
+        auto_install,
+    };
+    set_and_emit_status(&app, checking_status);
+
+    let channel_for_url = channel.clone();
+    let manifest_url_str = tauri::async_runtime::spawn_blocking(move || {
+        resolve_updater_manifest_url(&channel_for_url)
+    })
+    .await
+    .unwrap_or_else(|_| STABLE_UPDATER_MANIFEST_URL.to_string());
+
+    let endpoint_url = match Url::parse(&manifest_url_str) {
+        Ok(u) => u,
+        Err(err) => {
+            let msg = format!("Invalid updater endpoint URL: {err}");
+            let status = UpdateStatusDto {
+                state: "error".to_string(),
+                current_version,
+                latest_version: None,
+                downloaded_bytes: 0,
+                total_bytes: None,
+                percent: None,
+                release_notes: None,
+                published_at: None,
+                message: Some(msg.clone()),
+                auto_install,
+            };
+            set_and_emit_status(&app, status);
+            finish_in_progress(&app);
+            return Err(msg);
+        }
+    };
+
+    let updater = match app
+        .updater_builder()
+        .endpoints(vec![endpoint_url])
+        .and_then(|b| b.build())
+    {
+        Ok(u) => u,
+        Err(err) => {
+            let msg = format!("Failed to initialize in-app updater: {err}");
+            let status = UpdateStatusDto {
+                state: "error".to_string(),
+                current_version,
+                latest_version: None,
+                downloaded_bytes: 0,
+                total_bytes: None,
+                percent: None,
+                release_notes: None,
+                published_at: None,
+                message: Some(msg.clone()),
+                auto_install,
+            };
+            set_and_emit_status(&app, status);
+            finish_in_progress(&app);
+            return Err(msg);
+        }
+    };
+
+    let maybe_update = match updater.check().await {
+        Ok(opt) => opt,
+        Err(err) => {
+            let msg = format!("Could not check for updates: {err}");
+            let status = UpdateStatusDto {
+                state: "error".to_string(),
+                current_version,
+                latest_version: None,
+                downloaded_bytes: 0,
+                total_bytes: None,
+                percent: None,
+                release_notes: None,
+                published_at: None,
+                message: Some(msg.clone()),
+                auto_install,
+            };
+            set_and_emit_status(&app, status);
+            finish_in_progress(&app);
+            return Err(msg);
+        }
+    };
+
+    let Some(update) = maybe_update else {
+        let status = UpdateStatusDto {
+            state: "upToDate".to_string(),
+            current_version: current_version.clone(),
+            latest_version: Some(current_version),
+            downloaded_bytes: 0,
+            total_bytes: None,
+            percent: None,
+            release_notes: None,
+            published_at: None,
+            message: Some("RatPoison is up to date.".to_string()),
+            auto_install,
+        };
+        set_and_emit_status(&app, status.clone());
+        finish_in_progress(&app);
+        return Ok(status);
+    };
+
+    let latest_version = update.version.clone();
+    let release_notes = update.body.clone();
+    let published_at = update.date.map(|d| d.to_string());
+
+    if !install_now {
+        let status = UpdateStatusDto {
+            state: "available".to_string(),
+            current_version,
+            latest_version: Some(latest_version.clone()),
+            downloaded_bytes: 0,
+            total_bytes: None,
+            percent: None,
+            release_notes,
+            published_at,
+            message: Some(format!("RatPoison v{latest_version} is ready to install.")),
+            auto_install,
+        };
+        set_and_emit_status(&app, status.clone());
+        finish_in_progress(&app);
+        return Ok(status);
+    }
+
+    let downloading_status = UpdateStatusDto {
+        state: "downloading".to_string(),
+        current_version: current_version.clone(),
+        latest_version: Some(latest_version.clone()),
+        downloaded_bytes: 0,
+        total_bytes: None,
+        percent: Some(0),
+        release_notes: release_notes.clone(),
+        published_at: published_at.clone(),
+        message: Some(format!("Downloading RatPoison v{latest_version}…")),
+        auto_install,
+    };
+    set_and_emit_status(&app, downloading_status);
+
+    let app_for_progress = app.clone();
+    let cur_for_progress = current_version.clone();
+    let latest_for_progress = latest_version.clone();
+    let notes_for_progress = release_notes.clone();
+    let pub_for_progress = published_at.clone();
+
+    let app_for_finish = app.clone();
+    let cur_for_finish = current_version.clone();
+    let latest_for_finish = latest_version.clone();
+    let notes_for_finish = release_notes.clone();
+    let pub_for_finish = published_at.clone();
+
+    let mut downloaded_total: u64 = 0;
+    let mut last_emitted_percent: Option<u8> = Some(0);
+    let mut last_emitted_at = Instant::now();
+
+    let install_result = update
+        .download_and_install(
+            move |chunk_length, content_length| {
+                downloaded_total = downloaded_total.saturating_add(chunk_length as u64);
+                let pct = content_length
+                    .filter(|&total| total > 0)
+                    .map(|total| ((downloaded_total.saturating_mul(100)) / total).min(100) as u8);
+
+                let should_emit = last_emitted_at.elapsed() >= Duration::from_millis(120)
+                    || pct.is_some_and(|p| p >= 100 || last_emitted_percent.is_none_or(|prev| p >= prev.saturating_add(2)));
+
+                if should_emit {
+                    last_emitted_at = Instant::now();
+                    last_emitted_percent = pct;
+                    let status = UpdateStatusDto {
+                        state: "downloading".to_string(),
+                        current_version: cur_for_progress.clone(),
+                        latest_version: Some(latest_for_progress.clone()),
+                        downloaded_bytes: downloaded_total,
+                        total_bytes: content_length,
+                        percent: pct,
+                        release_notes: notes_for_progress.clone(),
+                        published_at: pub_for_progress.clone(),
+                        message: Some(match pct {
+                            Some(p) => format!("Downloading RatPoison v{latest_for_progress} ({p}%)…"),
+                            None => format!("Downloading RatPoison v{latest_for_progress}…"),
+                        }),
+                        auto_install,
+                    };
+                    set_and_emit_status(&app_for_progress, status);
+                }
+            },
+            move || {
+                let status = UpdateStatusDto {
+                    state: "installing".to_string(),
+                    current_version: cur_for_finish.clone(),
+                    latest_version: Some(latest_for_finish.clone()),
+                    downloaded_bytes: 0,
+                    total_bytes: None,
+                    percent: Some(100),
+                    release_notes: notes_for_finish.clone(),
+                    published_at: pub_for_finish.clone(),
+                    message: Some(format!(
+                        "Installing RatPoison v{latest_for_finish} and restarting…"
+                    )),
+                    auto_install,
+                };
+                set_and_emit_status(&app_for_finish, status);
+            },
+        )
+        .await;
+
+    if let Err(err) = install_result {
+        let msg = format!("Failed to install update v{latest_version}: {err}");
+        let status = UpdateStatusDto {
+            state: "error".to_string(),
+            current_version,
+            latest_version: Some(latest_version),
+            downloaded_bytes: 0,
+            total_bytes: None,
+            percent: None,
+            release_notes,
+            published_at,
+            message: Some(msg.clone()),
+            auto_install,
+        };
+        set_and_emit_status(&app, status);
+        finish_in_progress(&app);
+        return Err(msg);
+    }
+
+    let ready_status = UpdateStatusDto {
+        state: "ready".to_string(),
+        current_version,
+        latest_version: Some(latest_version.clone()),
+        downloaded_bytes: 0,
+        total_bytes: None,
+        percent: Some(100),
+        release_notes,
+        published_at,
+        message: Some(format!(
+            "RatPoison v{latest_version} installed. Restarting…"
+        )),
+        auto_install,
+    };
+    set_and_emit_status(&app, ready_status.clone());
+    finish_in_progress(&app);
+
+    // Give the UI a brief moment to paint the restarting state, then relaunch into the new build.
+    let app_for_restart = app.clone();
+    tauri::async_runtime::spawn(async move {
+        std::thread::sleep(Duration::from_millis(450));
+        app_for_restart.restart();
+    });
+
+    Ok(ready_status)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,5 +953,44 @@ mod tests {
         assert!(validate_external_release_url("https://github.com/emrisca/RatPoisonEvil/releases").is_err());
         assert!(validate_external_release_url("file:///etc/passwd").is_err());
         assert!(validate_external_release_url("https://github.com/emrisca/RatPoison/releases\nopen /bin/sh").is_err());
+    }
+
+    #[test]
+    fn updater_manifest_url_resolves_stable_and_beta_channels() {
+        let stable_url = select_updater_manifest_url_from_list(&[], "stable");
+        assert_eq!(stable_url, STABLE_UPDATER_MANIFEST_URL);
+
+        let releases = vec![
+            make_release(
+                "v0.3.0-beta.2",
+                true,
+                true,
+                "draft",
+                vec![GitHubAsset {
+                    name: "latest.json".to_string(),
+                    browser_download_url:
+                        "https://github.com/emrisca/RatPoison/releases/download/v0.3.0-beta.2/latest.json"
+                            .to_string(),
+                }],
+            ),
+            make_release(
+                "v0.2.0-beta.1",
+                false,
+                true,
+                "beta",
+                vec![GitHubAsset {
+                    name: "latest.json".to_string(),
+                    browser_download_url:
+                        "https://github.com/emrisca/RatPoison/releases/download/v0.2.0-beta.1/latest.json"
+                            .to_string(),
+                }],
+            ),
+            make_release("v0.2.1", false, false, "no manifest", sample_assets()),
+        ];
+
+        assert_eq!(
+            select_updater_manifest_url_from_list(&releases, "beta"),
+            "https://github.com/emrisca/RatPoison/releases/download/v0.2.0-beta.1/latest.json"
+        );
     }
 }

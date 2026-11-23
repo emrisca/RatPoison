@@ -237,6 +237,29 @@ export interface UpdateCheckResult {
   assetName?: string;
 }
 
+export type UpdateStatusState =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'downloading'
+  | 'installing'
+  | 'ready'
+  | 'upToDate'
+  | 'error';
+
+export interface UpdateStatus {
+  state: UpdateStatusState;
+  currentVersion: string;
+  latestVersion?: string;
+  downloadedBytes: number;
+  totalBytes?: number;
+  percent?: number;
+  releaseNotes?: string;
+  publishedAt?: string;
+  message?: string;
+  autoInstall: boolean;
+}
+
 export type SettingsTabId =
   | 'general'
   | 'grid'
@@ -249,6 +272,7 @@ export type SettingsTabId =
 export const TAURI_EVENTS = {
   OVERLAY_STATE: 'ratpoison://overlay-state',
   CONFIG_UPDATED: 'ratpoison://config-updated',
+  UPDATE_STATUS: 'ratpoison://update-status',
 } as const;
 
 export const TAURI_COMMANDS = {
@@ -262,6 +286,8 @@ export const TAURI_COMMANDS = {
   REQUEST_PERMISSIONS: 'request_permissions',
   OPEN_ACCESSIBILITY_SETTINGS: 'open_accessibility_settings',
   CHECK_FOR_UPDATES: 'check_for_updates',
+  GET_UPDATE_STATUS: 'get_update_status',
+  INSTALL_UPDATE: 'install_update',
   OPEN_EXTERNAL_URL: 'open_external_url',
   TOGGLE_OVERLAY_MODE: 'toggle_overlay_mode',
 } as const;

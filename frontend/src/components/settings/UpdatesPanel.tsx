@@ -2,6 +2,7 @@ import { Download, ExternalLink, RefreshCw, Sparkles } from 'lucide-react';
 import { GITHUB_RELEASES_URL } from '../../ipc/tauriBridge';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { SettingControlByPath } from './SettingControls';
+import '../../styles/updates.css';
 
 function formatPublishedDate(iso?: string): string | null {
   if (!iso) return null;
@@ -14,19 +15,73 @@ function formatPublishedDate(iso?: string): string | null {
   }).format(new Date(parsed));
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  const mb = kb / 1024;
+  return `${mb.toFixed(1)} MB`;
+}
+
 /**
- * Updates tab view combining release channel controls with live GitHub Releases checks.
+ * Updates tab view combining signed automatic in-app updates with release notes and preferences.
  */
 export function UpdatesPanel() {
   const config = useSettingsStore((s) => s.config);
   const updateResult = useSettingsStore((s) => s.updateResult);
+  const updateStatus = useSettingsStore((s) => s.updateStatus);
   const busyAction = useSettingsStore((s) => s.busyAction);
   const checkForUpdates = useSettingsStore((s) => s.checkForUpdates);
+  const installUpdate = useSettingsStore((s) => s.installUpdate);
   const openExternalUrl = useSettingsStore((s) => s.openExternalUrl);
 
+  const currentVersion = updateStatus?.currentVersion ?? updateResult?.currentVersion ?? '0.1.2';
+  const latestVersion =
+    (updateStatus?.latestVersion && updateStatus.latestVersion !== currentVersion
+      ? updateStatus.latestVersion
+      : undefined) ??
+    (updateResult?.updateAvailable ? updateResult.latestVersion : undefined) ??
+    updateResult?.latestVersion ??
+    currentVersion;
+
+  const isInstalling =
+    updateStatus?.state === 'downloading' ||
+    updateStatus?.state === 'installing' ||
+    updateStatus?.state === 'ready' ||
+    busyAction === 'install-update';
+
+  const isChecking = updateStatus?.state === 'checking' || busyAction === 'updates';
+
+  const updateAvailable =
+    updateStatus?.state === 'available' ||
+    updateStatus?.state === 'downloading' ||
+    updateStatus?.state === 'installing' ||
+    updateStatus?.state === 'ready' ||
+    Boolean(updateResult?.updateAvailable);
+
   const releaseUrl = updateResult?.releaseUrl ?? GITHUB_RELEASES_URL;
-  const downloadUrl = updateResult?.downloadUrl ?? releaseUrl;
-  const publishedLabel = formatPublishedDate(updateResult?.publishedAt);
+  const publishedLabel = formatPublishedDate(updateStatus?.publishedAt ?? updateResult?.publishedAt);
+  const releaseNotes = updateResult?.releaseNotes || updateStatus?.releaseNotes;
+
+  const statusHeadline = (() => {
+    if (updateStatus?.state === 'downloading') {
+      return updateStatus.message ?? `Downloading RatPoison v${latestVersion}…`;
+    }
+    if (updateStatus?.state === 'installing' || updateStatus?.state === 'ready') {
+      return updateStatus.message ?? `Installing RatPoison v${latestVersion} and restarting…`;
+    }
+    if (updateAvailable) {
+      return config.updates.autoDownload
+        ? `RatPoison v${latestVersion} is ready — updates install automatically in-app and restart cleanly.`
+        : `RatPoison v${latestVersion} (${config.updates.channel}) is ready to install in-app without downloading an installer.`;
+    }
+    if (updateStatus?.state === 'upToDate' || updateResult) {
+      return `You are running the latest ${config.updates.channel} release (v${latestVersion}).`;
+    }
+    return config.updates.autoDownload
+      ? 'Automatic signed in-app updates are enabled. New releases install and restart automatically.'
+      : 'Signed in-app updates via GitHub Releases — install new builds with one click.';
+  })();
 
   return (
     <div className="rp-panel-stack">
@@ -36,54 +91,92 @@ export function UpdatesPanel() {
         </div>
         <div className="rp-status-body">
           <div className="rp-status-headline">
-            <span>RatPoison v{updateResult?.currentVersion ?? '0.1.1'}</span>
-            {updateResult?.updateAvailable && (
-              <span className="rp-update-pill">v{updateResult.latestVersion} available</span>
+            <span>RatPoison v{currentVersion}</span>
+            {updateAvailable && !isInstalling && (
+              <span className="rp-update-pill">v{latestVersion} ready</span>
+            )}
+            {isInstalling && (
+              <span className="rp-update-pill">
+                {updateStatus?.state === 'downloading'
+                  ? updateStatus.percent !== undefined
+                    ? `Downloading ${updateStatus.percent}%`
+                    : 'Downloading…'
+                  : 'Installing…'}
+              </span>
+            )}
+            {!updateAvailable && config.updates.autoDownload && (
+              <span className="rp-update-pill rp-update-pill--auto">Auto-update on</span>
             )}
           </div>
-          <p className="rp-status-sub">
-            {updateResult
-              ? updateResult.updateAvailable
-                ? `A newer ${config.updates.channel} build (v${updateResult.latestVersion}) is live on GitHub Releases.`
-                : `You are on the latest ${config.updates.channel} release (v${updateResult.latestVersion}).`
-              : 'Free & open-source (MIT). Checks live releases from github.com/emrisca/RatPoison.'}
-          </p>
+
+          <p className="rp-status-sub">{statusHeadline}</p>
+
+          {isInstalling && (
+            <div className="rp-update-progress" role="progressbar" aria-valuenow={updateStatus?.percent}>
+              <div className="rp-update-progress-track">
+                <div
+                  className={`rp-update-progress-fill${
+                    updateStatus?.percent === undefined ? ' rp-update-progress-fill--indeterminate' : ''
+                  }`}
+                  style={
+                    updateStatus?.percent !== undefined
+                      ? { width: `${Math.max(4, Math.min(100, updateStatus.percent))}%` }
+                      : undefined
+                  }
+                />
+              </div>
+              <div className="rp-update-progress-meta">
+                <span>
+                  {updateStatus?.state === 'downloading'
+                    ? updateStatus.totalBytes
+                      ? `${formatBytes(updateStatus.downloadedBytes)} / ${formatBytes(updateStatus.totalBytes)}`
+                      : updateStatus.downloadedBytes > 0
+                        ? `${formatBytes(updateStatus.downloadedBytes)} downloaded`
+                        : 'Connecting to signed release…'
+                    : 'Verifying signature & replacing app…'}
+                </span>
+                {updateStatus?.percent !== undefined && <span>{updateStatus.percent}%</span>}
+              </div>
+            </div>
+          )}
+
+          {updateStatus?.state === 'error' && updateStatus.message && (
+            <p className="rp-update-error-note">{updateStatus.message}</p>
+          )}
+
           <div className="rp-update-meta">
-            <span>Source: github.com/emrisca/RatPoison/releases</span>
+            <span>Signed in-app updater · github.com/emrisca/RatPoison</span>
             {publishedLabel && <span>· Published {publishedLabel}</span>}
-            {updateResult?.assetName && <span>· {updateResult.assetName}</span>}
           </div>
         </div>
+
         <div className="rp-status-actions">
-          {updateResult?.updateAvailable && (
+          {updateAvailable && (
             <button
               type="button"
               className="rp-btn rp-btn--primary"
-              onClick={() => void openExternalUrl(downloadUrl)}
-              title={
-                updateResult.assetName
-                  ? `Download ${updateResult.assetName}`
-                  : `Open v${updateResult.latestVersion} on GitHub Releases`
-              }
+              disabled={isInstalling}
+              onClick={() => void installUpdate()}
+              title={`Download, verify, install v${latestVersion}, and restart RatPoison`}
             >
               <Download size={14} />
-              Download v{updateResult.latestVersion}
+              {isInstalling ? 'Installing…' : `Install & Restart v${latestVersion}`}
             </button>
           )}
           <button
             type="button"
-            className={`rp-btn ${updateResult?.updateAvailable ? 'rp-btn--secondary' : 'rp-btn--primary'}`}
-            disabled={busyAction !== null}
+            className={`rp-btn ${updateAvailable ? 'rp-btn--secondary' : 'rp-btn--primary'}`}
+            disabled={isChecking || isInstalling}
             onClick={() => void checkForUpdates()}
           >
-            <RefreshCw size={14} className={busyAction === 'updates' ? 'rp-spin' : undefined} />
-            {busyAction === 'updates' ? 'Checking…' : 'Check for Updates'}
+            <RefreshCw size={14} className={isChecking ? 'rp-spin' : undefined} />
+            {isChecking ? 'Checking…' : 'Check for Updates'}
           </button>
           <button
             type="button"
             className="rp-btn rp-btn--secondary"
             onClick={() => void openExternalUrl(releaseUrl)}
-            title="Open RatPoison Releases on GitHub"
+            title="View release history on GitHub"
           >
             <ExternalLink size={14} />
             Releases
@@ -91,11 +184,11 @@ export function UpdatesPanel() {
         </div>
       </div>
 
-      {updateResult?.releaseNotes && (
+      {releaseNotes && (
         <section className="rp-section-card">
           <div className="rp-section-header">
             <h3 className="rp-section-title">
-              Release Notes — v{updateResult.latestVersion}
+              Release Notes — v{latestVersion}
             </h3>
             <button
               type="button"
@@ -106,7 +199,7 @@ export function UpdatesPanel() {
               View on GitHub
             </button>
           </div>
-          <pre className="rp-code-block">{updateResult.releaseNotes}</pre>
+          <pre className="rp-code-block">{releaseNotes}</pre>
         </section>
       )}
 

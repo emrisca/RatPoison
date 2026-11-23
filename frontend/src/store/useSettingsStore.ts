@@ -15,11 +15,14 @@ import {
   ipcGetMonitors,
   ipcGetPermissions,
   ipcGetPlatformInfo,
+  ipcGetUpdateStatus,
+  ipcInstallUpdate,
   ipcOpenAccessibilitySettings,
   ipcOpenExternalUrl,
   ipcRequestPermissions,
   ipcResetSettingKey,
   ipcUpdateConfig,
+  subscribeUpdateStatus,
 } from '../ipc/tauriBridge';
 import type {
   MonitorInfo,
@@ -29,6 +32,7 @@ import type {
   RatPoisonConfig,
   SettingsTabId,
   UpdateCheckResult,
+  UpdateStatus,
 } from '../types/ipc';
 
 export interface ContextMenuState {
@@ -46,6 +50,7 @@ export interface SettingsStoreState {
   config: RatPoisonConfig;
   monitors: MonitorInfo[];
   updateResult: UpdateCheckResult | null;
+  updateStatus: UpdateStatus | null;
   activeTab: SettingsTabId;
   searchQuery: string;
   loading: boolean;
@@ -71,6 +76,7 @@ export interface SettingsStoreState {
   requestPermissions: () => Promise<void>;
   openAccessibilitySettings: () => Promise<void>;
   checkForUpdates: (options?: { silent?: boolean }) => Promise<void>;
+  installUpdate: () => Promise<void>;
   openExternalUrl: (url: string) => Promise<void>;
   clearFeedback: () => void;
 }
@@ -84,6 +90,7 @@ const initialPlatform: PlatformInfo = {
 };
 
 let toastTimer: number | null = null;
+let updateStatusSubscribed = false;
 
 function scheduleToastClear(set: (partial: Partial<SettingsStoreState>) => void) {
   if (toastTimer !== null) {
@@ -102,6 +109,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   config: structuredClone(DEFAULT_CONFIG),
   monitors: [],
   updateResult: null,
+  updateStatus: null,
   activeTab: 'general',
   searchQuery: '',
   loading: true,
@@ -124,12 +132,31 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
         ...getDefaultConfigForOs(platform.os),
         keybindings: { ...platform.defaultKeybindings },
       };
-      const [config, monitors, permissions] = await Promise.all([
+      const [config, monitors, permissions, updateStatus] = await Promise.all([
         ipcGetConfig(defaultConfig),
         ipcGetMonitors(),
         ipcGetPermissions(),
+        ipcGetUpdateStatus().catch(() => null),
       ]);
-      set({ platform, permissions, defaultConfig, config, monitors, loading: false });
+      set({ platform, permissions, defaultConfig, config, monitors, updateStatus, loading: false });
+
+      if (!updateStatusSubscribed) {
+        updateStatusSubscribed = true;
+        void subscribeUpdateStatus((status) => {
+          const patch: Partial<SettingsStoreState> = { updateStatus: status };
+          if (status.state === 'available' && status.latestVersion) {
+            patch.toastMessage = `RatPoison v${status.latestVersion} is ready to install`;
+          } else if (status.state === 'installing' || status.state === 'ready') {
+            patch.toastMessage = status.message ?? 'Installing update and restarting…';
+          } else if (status.state === 'error' && status.message) {
+            patch.busyAction = null;
+          }
+          set(patch);
+          if (patch.toastMessage) {
+            scheduleToastClear(set);
+          }
+        });
+      }
     } catch (err) {
       set({
         loading: false,
@@ -288,6 +315,26 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
           errorMessage: err instanceof Error ? err.message : 'Update check failed',
         });
       }
+    }
+  },
+
+  installUpdate: async () => {
+    set({ busyAction: 'install-update', errorMessage: null });
+    try {
+      const status = await ipcInstallUpdate(get().config.updates.channel);
+      set({
+        updateStatus: status,
+        busyAction: status.state === 'downloading' || status.state === 'installing' || status.state === 'ready'
+          ? 'install-update'
+          : null,
+        toastMessage: status.message ?? 'Update check complete',
+      });
+      scheduleToastClear(set);
+    } catch (err) {
+      set({
+        busyAction: null,
+        errorMessage: err instanceof Error ? err.message : 'Failed to install update',
+      });
     }
   },
 

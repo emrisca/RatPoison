@@ -206,6 +206,12 @@ export function SettingsView() {
     [config, defaultConfig],
   );
 
+  useEffect(() => {
+    if (totalModifiedCount === 0 && confirmResetAll) {
+      setConfirmResetAll(false);
+    }
+  }, [totalModifiedCount, confirmResetAll]);
+
   const isSearching = searchQuery.trim().length > 0;
 
   return (
@@ -291,7 +297,7 @@ export function SettingsView() {
           })}
         </nav>
 
-        {/* Sidebar Footer: Platform, Monitor Info & Factory Reset */}
+        {/* Sidebar Footer: Platform, Monitor Info & Subtle Factory Reset */}
         <div className="rp-sidebar-footer">
           <div className="rp-monitor-chip" title={`Detected host OS: ${platform.displayName}`}>
             <Laptop size={13} />
@@ -304,38 +310,38 @@ export function SettingsView() {
             </span>
           </div>
 
-          {!confirmResetAll ? (
-            <button
-              type="button"
-              className="rp-reset-all-btn"
-              disabled={totalModifiedCount === 0}
-              onClick={() => setConfirmResetAll(true)}
-            >
-              <RotateCcw size={13} />
-              <span>Reset All Defaults ({totalModifiedCount})</span>
-            </button>
-          ) : (
-            <div className="rp-confirm-reset">
-              <span>Restore all?</span>
+          {totalModifiedCount > 0 &&
+            (!confirmResetAll ? (
               <button
                 type="button"
-                className="rp-mini-danger"
-                onClick={() => {
-                  setConfirmResetAll(false);
-                  void resetAllDefaults();
-                }}
+                className="rp-reset-all-btn"
+                onClick={() => setConfirmResetAll(true)}
               >
-                Confirm
+                <RotateCcw size={12} />
+                <span>Reset defaults ({totalModifiedCount})</span>
               </button>
-              <button
-                type="button"
-                className="rp-mini-cancel"
-                onClick={() => setConfirmResetAll(false)}
-              >
-                Cancel
-              </button>
-            </div>
-          )}
+            ) : (
+              <div className="rp-confirm-reset">
+                <span>Restore all?</span>
+                <button
+                  type="button"
+                  className="rp-mini-danger"
+                  onClick={() => {
+                    setConfirmResetAll(false);
+                    void resetAllDefaults();
+                  }}
+                >
+                  Confirm
+                </button>
+                <button
+                  type="button"
+                  className="rp-mini-cancel"
+                  onClick={() => setConfirmResetAll(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            ))}
         </div>
       </aside>
 
@@ -348,7 +354,7 @@ export function SettingsView() {
             </h1>
             <p className="rp-content-subtitle">
               {isSearching
-                ? `${searchResults.length} matching setting${searchResults.length === 1 ? '' : 's'} across all tabs — right-click any row to Restore Default.`
+                ? `${searchResults.length} matching setting${searchResults.length === 1 ? '' : 's'} across all tabs`
                 : activeTabMeta.shortDescription}
             </p>
           </div>
@@ -356,10 +362,10 @@ export function SettingsView() {
           {!isSearching && activeTabModifiedCount > 0 && (
             <button
               type="button"
-              className="rp-btn rp-btn--secondary"
+              className="rp-btn rp-btn--quiet"
               onClick={() => void resetTabToDefaults(activeTab)}
             >
-              <RotateCcw size={14} />
+              <RotateCcw size={13} />
               Reset Tab ({activeTabModifiedCount})
             </button>
           )}
@@ -429,8 +435,8 @@ export function SettingsView() {
               </div>
             ) : (
               <section className="rp-section-card">
-                <div className="rp-search-hint-bar">
-                  Live-editable matches — right-click any row or click its amber dot to Restore Default.
+                <div className="rp-section-header">
+                  <h3 className="rp-section-title">Matches</h3>
                 </div>
                 {searchResults.map((item) => (
                   <SettingControlByPath
@@ -490,7 +496,6 @@ export function SettingsView() {
                 <section key={sectionName} className="rp-section-card">
                   <div className="rp-section-header">
                     <h3 className="rp-section-title">{sectionName}</h3>
-                    <span className="rp-section-hint">Right-click any row to restore default</span>
                   </div>
                   {items.map((item) => (
                     <SettingControlByPath key={item.path} path={item.path} />
