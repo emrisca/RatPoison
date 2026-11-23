@@ -7,10 +7,6 @@ edition.workspace = true
 ratpoison-core = { path = "../ratpoison-core" }
 ratpoison-hid = { path = "../ratpoison-hid" }
 ratpoison-a11y = { path = "../ratpoison-a11y" }
-ratpoison-license = { path = "../ratpoison-license" }
 serde.workspace = true
 serde_json.workspace = true
 zeroize.workspace = true
-ed25519-dalek.workspace = true
-base64.workspace = true
-sha2.workspace = true

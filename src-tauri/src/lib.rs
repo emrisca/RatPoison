@@ -1,15 +1,14 @@
 //! RatPoison Tauri v2 Desktop Application Shell.
 //!
-//! Wires `ratpoison-core`, `ratpoison-hid`, `ratpoison-a11y`, and `ratpoison-license`
-//! to the React/TypeScript overlay & searchable settings frontend via 10 typed IPC commands.
+//! Wires `ratpoison-core`, `ratpoison-hid`, and `ratpoison-a11y`
+//! to the React/TypeScript overlay & searchable settings frontend via typed IPC commands.
 
 pub mod bridge;
 pub mod ipc;
 
 use crate::bridge::AppRuntime;
 use crate::ipc::{
-    LicenseStatusDto, MonitorDto, OfflineChallengeDto, OverlayStatePayloadDto,
-    UpdateCheckResultDto, EVENT_CONFIG_UPDATED,
+    MonitorDto, OverlayStatePayloadDto, PlatformInfoDto, UpdateCheckResultDto, EVENT_CONFIG_UPDATED,
 };
 use ratpoison_core::{EngineEvent, LogicalRect, MonitorInfo, MonitorLayout, PhysicalPoint};
 use serde_json::Value;
@@ -85,16 +84,10 @@ fn update_config(
     config: Value,
 ) -> Result<Value, String> {
     let mut rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
-    let saved = rt.config_store.update_and_save(config)?;
-    let core_cfg = rt.config_store.to_core_config();
-    rt.dispatch_event(
-        EngineEvent::ConfigUpdated {
-            config: Box::new(core_cfg),
-        },
-        Some(&app),
-    );
-    let _ = app.emit(EVENT_CONFIG_UPDATED, &saved);
-    Ok(saved)
+    let updated = rt.config_store.update_and_save(config)?;
+    rt.sync_core_config_from_store();
+    let _ = app.emit(EVENT_CONFIG_UPDATED, &updated);
+    Ok(updated)
 }
 
 #[tauri::command]
@@ -104,66 +97,33 @@ fn reset_setting_key(
     key: String,
 ) -> Result<Value, String> {
     let mut rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
-    let saved = rt.config_store.reset_key_and_save(&key)?;
-    let core_cfg = rt.config_store.to_core_config();
-    rt.dispatch_event(
-        EngineEvent::ConfigUpdated {
-            config: Box::new(core_cfg),
-        },
-        Some(&app),
-    );
-    let _ = app.emit(EVENT_CONFIG_UPDATED, &saved);
-    Ok(saved)
+    let updated = rt.config_store.reset_key_and_save(&key)?;
+    rt.sync_core_config_from_store();
+    let _ = app.emit(EVENT_CONFIG_UPDATED, &updated);
+    Ok(updated)
 }
 
 #[tauri::command]
-fn get_monitors(app: AppHandle, state: State<'_, SharedRuntime>) -> Result<Vec<MonitorDto>, String> {
+fn get_monitors(
+    app: AppHandle,
+    state: State<'_, SharedRuntime>,
+) -> Result<Vec<MonitorDto>, String> {
     let live = query_tauri_monitors(&app);
     let mut rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
     if !live.is_empty() {
         if let Ok(layout) = MonitorLayout::new(live) {
-            rt.dispatch_event(EngineEvent::MonitorsUpdated { layout }, None);
+            let _ = rt
+                .engine
+                .handle_event(EngineEvent::MonitorsUpdated { layout });
         }
     }
     Ok(rt.monitors_dto())
 }
 
 #[tauri::command]
-fn get_license_status(state: State<'_, SharedRuntime>) -> Result<LicenseStatusDto, String> {
-    let mut rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
-    rt.license_status_dto()
-}
-
-#[tauri::command]
-fn activate_license(
-    state: State<'_, SharedRuntime>,
-    license_key: String,
-) -> Result<LicenseStatusDto, String> {
-    let mut rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
-    rt.activate_license(&license_key)
-}
-
-#[tauri::command]
-fn deactivate_machine(state: State<'_, SharedRuntime>) -> Result<LicenseStatusDto, String> {
-    let mut rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
-    rt.deactivate_current_machine()
-}
-
-#[tauri::command]
-fn generate_offline_challenge(
-    state: State<'_, SharedRuntime>,
-) -> Result<OfflineChallengeDto, String> {
+fn get_platform_info(state: State<'_, SharedRuntime>) -> Result<PlatformInfoDto, String> {
     let rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
-    rt.generate_offline_challenge()
-}
-
-#[tauri::command]
-fn apply_offline_response(
-    state: State<'_, SharedRuntime>,
-    response_blob: String,
-) -> Result<LicenseStatusDto, String> {
-    let mut rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
-    rt.apply_offline_response(&response_blob)
+    Ok(rt.platform_info_dto())
 }
 
 #[tauri::command]
@@ -175,7 +135,6 @@ fn check_for_updates(
     rt.check_for_updates(&channel)
 }
 
-/// Optional helper command allowing tray or dev harness to toggle modes cleanly.
 #[tauri::command]
 fn toggle_overlay_mode(
     app: AppHandle,
@@ -188,8 +147,8 @@ fn toggle_overlay_mode(
             monitor_id: None,
             preset_id: None,
         },
-        "free" => EngineEvent::ActivateFreeMode { preset_id: None },
         "label" => EngineEvent::ActivateLabelMode,
+        "free" => EngineEvent::ActivateFreeMode { preset_id: None },
         _ => EngineEvent::ExitToNormal,
     };
     Ok(rt.dispatch_event(event, Some(&app)))
@@ -197,14 +156,14 @@ fn toggle_overlay_mode(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Enforce anti-core-dump Memory Hygiene hardening before any window or hook starts.
+    // Harden process memory before initializing UI or hooks (RLIMIT_CORE=0 / PR_SET_DUMPABLE=0).
     let _ = ratpoison_hid::harden_process_memory();
 
     tauri::Builder::default()
         .setup(|app| {
             let handle = app.handle();
 
-            // Enforce click-through on the transparent overlay window from boot.
+            // Strictly enforce click-through on the overlay window from the moment it exists.
             if let Some(overlay) = app.get_webview_window("overlay") {
                 let _ = overlay.set_ignore_cursor_events(true);
             }
@@ -283,11 +242,7 @@ pub fn run() {
             update_config,
             reset_setting_key,
             get_monitors,
-            get_license_status,
-            activate_license,
-            deactivate_machine,
-            generate_offline_challenge,
-            apply_offline_response,
+            get_platform_info,
             check_for_updates,
             toggle_overlay_mode,
         ])
@@ -298,7 +253,9 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ipc::{project_snapshot_to_overlay_payload, ConfigStore};
+    use crate::ipc::{
+        default_keybindings_for_os, detect_os, project_snapshot_to_overlay_payload, ConfigStore,
+    };
     use ratpoison_core::{CoreEngine, EngineEvent, LogicalRect, MonitorInfo, MonitorLayout};
     use serde_json::json;
 
@@ -339,12 +296,10 @@ mod tests {
         assert_eq!(payload.active_monitor.id, "display-left");
         assert!(!payload.grid_cells.is_empty());
 
-        // First grid cell must start at overlay window-relative (0, 0), NOT (-1920, -200)
         let first = &payload.grid_cells[0];
         assert!(first.rect.x.abs() < 1e-6, "expected 0.0, got {}", first.rect.x);
         assert!(first.rect.y.abs() < 1e-6, "expected 0.0, got {}", first.rect.y);
 
-        // Verify strict camelCase JSON keys matching frontend/src/types/ipc.ts
         let serialized = serde_json::to_value(&payload).expect("serialize payload");
         assert!(serialized.get("activeMonitor").is_some());
         assert!(serialized.get("gridCells").is_some());
@@ -383,17 +338,26 @@ mod tests {
     }
 
     #[test]
-    fn runtime_license_and_updater_roundtrip_without_network() {
-        let mut rt = AppRuntime::initialize(Vec::new());
-        let status = rt.license_status_dto().expect("trial status");
-        assert_eq!(status.state, "trial");
-        assert_eq!(status.trial_days_remaining, 14);
-        assert_eq!(status.machines_max, 5);
+    fn os_detection_selects_native_non_conflicting_keybindings() {
+        let mac = default_keybindings_for_os("macos");
+        assert_eq!(mac.toggle_grid, "Option+Space");
+        assert_eq!(mac.open_settings, "Cmd+,");
 
-        let challenge = rt
-            .generate_offline_challenge()
-            .expect("offline challenge");
-        assert!(challenge.challenge_code.starts_with("RP-CHALLENGE-V1:"));
+        let win = default_keybindings_for_os("windows");
+        assert_eq!(win.toggle_grid, "Ctrl+Alt+Space");
+        assert_eq!(win.open_settings, "Ctrl+,");
+
+        let lin = default_keybindings_for_os("linux");
+        assert_eq!(lin.toggle_grid, "Super+Alt+Space");
+        assert_eq!(lin.open_settings, "Ctrl+,");
+
+        let rt = AppRuntime::initialize(Vec::new());
+        let platform = rt.platform_info_dto();
+        assert_eq!(platform.os, detect_os());
+        assert_eq!(
+            platform.default_keybindings,
+            default_keybindings_for_os(detect_os())
+        );
 
         let upd = rt.check_for_updates("stable").expect("update check");
         assert_eq!(upd.current_version, "0.1.0");

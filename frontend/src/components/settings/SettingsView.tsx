@@ -3,8 +3,8 @@ import {
   Crosshair,
   Download,
   Grid3X3,
-  KeyRound,
   Keyboard,
+  Laptop,
   Monitor,
   MousePointer2,
   Palette,
@@ -23,8 +23,7 @@ import {
 } from '../../config/defaults';
 import { subscribeConfigUpdated } from '../../ipc/tauriBridge';
 import { useSettingsStore } from '../../store/useSettingsStore';
-import type { SettingsTabId } from '../../types/ipc';
-import { LicensingPanel } from './LicensingPanel';
+import type { PlatformOs, SettingsTabId } from '../../types/ipc';
 import { LiveOverlayPreview } from './LiveOverlayPreview';
 import { RestoreContextMenu } from './RestoreContextMenu';
 import { SettingControlByPath } from './SettingControls';
@@ -37,7 +36,6 @@ const TAB_ICONS: Record<SettingsTabId, ReactNode> = {
   labelMode: <Tag size={16} />,
   keybindings: <Keyboard size={16} />,
   appearance: <Palette size={16} />,
-  licensing: <KeyRound size={16} />,
   updates: <Download size={16} />,
 };
 
@@ -59,6 +57,8 @@ function groupBySection(items: SettingDescriptor[]): Array<[string, SettingDescr
  * Searchable, tabbed Settings window (`?view=settings`).
  */
 export function SettingsView() {
+  const platform = useSettingsStore((s) => s.platform);
+  const defaultConfig = useSettingsStore((s) => s.defaultConfig);
   const config = useSettingsStore((s) => s.config);
   const monitors = useSettingsStore((s) => s.monitors);
   const activeTab = useSettingsStore((s) => s.activeTab);
@@ -73,12 +73,13 @@ export function SettingsView() {
   const setSearchQuery = useSettingsStore((s) => s.setSearchQuery);
   const resetTabToDefaults = useSettingsStore((s) => s.resetTabToDefaults);
   const resetAllDefaults = useSettingsStore((s) => s.resetAllDefaults);
+  const applyOsKeybindPreset = useSettingsStore((s) => s.applyOsKeybindPreset);
   const clearFeedback = useSettingsStore((s) => s.clearFeedback);
 
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [confirmResetAll, setConfirmResetAll] = useState(false);
 
-  // Load config, monitors, license status + listen for external config updates
+  // Load platform info, config, monitors + listen for external config updates
   useEffect(() => {
     void loadInitialData();
     let active = true;
@@ -139,7 +140,7 @@ export function SettingsView() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [setSearchQuery]);
 
-  // Live fuzzy + substring search across all 8 tabs
+  // Live fuzzy + substring search across all tabs
   const searchResults = useMemo(() => {
     const q = searchQuery.trim();
     if (!q) return [];
@@ -169,10 +170,14 @@ export function SettingsView() {
     return groupBySection(items);
   }, [activeTab]);
 
-  const activeTabModifiedCount = getModifiedPathsForTab(config, activeTab).length;
+  const activeTabModifiedCount = getModifiedPathsForTab(config, activeTab, defaultConfig).length;
   const totalModifiedCount = useMemo(
-    () => SETTINGS_TABS.reduce((acc, t) => acc + getModifiedPathsForTab(config, t.id).length, 0),
-    [config],
+    () =>
+      SETTINGS_TABS.reduce(
+        (acc, t) => acc + getModifiedPathsForTab(config, t.id, defaultConfig).length,
+        0,
+      ),
+    [config, defaultConfig],
   );
 
   const isSearching = searchQuery.trim().length > 0;
@@ -187,7 +192,7 @@ export function SettingsView() {
           </div>
           <div>
             <div className="rp-brand-name">RatPoison</div>
-            <div className="rp-brand-version">v0.1.0 · Rust + Tauri v2</div>
+            <div className="rp-brand-version">v0.1.0 · MIT FOSS</div>
           </div>
         </div>
 
@@ -198,7 +203,7 @@ export function SettingsView() {
             ref={searchInputRef}
             type="text"
             className="rp-search-input"
-            placeholder="Search settings… (⌘K)"
+            placeholder={platform.os === 'macos' ? 'Search settings… (⌘K)' : 'Search settings… (Ctrl+K)'}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             aria-label="Search all settings"
@@ -218,7 +223,7 @@ export function SettingsView() {
         {/* Tab Navigation */}
         <nav className="rp-nav" aria-label="Settings Categories">
           {SETTINGS_TABS.map((tab) => {
-            const modifiedCount = getModifiedPathsForTab(config, tab.id).length;
+            const modifiedCount = getModifiedPathsForTab(config, tab.id, defaultConfig).length;
             const searchCount = isSearching ? matchCountByTab[tab.id] ?? 0 : 0;
             const isActive = !isSearching && activeTab === tab.id;
 
@@ -251,8 +256,12 @@ export function SettingsView() {
           })}
         </nav>
 
-        {/* Sidebar Footer: Monitor Info & Factory Reset */}
+        {/* Sidebar Footer: Platform, Monitor Info & Factory Reset */}
         <div className="rp-sidebar-footer">
+          <div className="rp-monitor-chip" title={`Detected host OS: ${platform.displayName}`}>
+            <Laptop size={13} />
+            <span>{platform.displayName}</span>
+          </div>
           <div className="rp-monitor-chip" title={monitors.map((m) => `${m.name} (${m.scaleFactor}x)`).join('\n')}>
             <Monitor size={13} />
             <span>
@@ -360,14 +369,49 @@ export function SettingsView() {
                 ))}
               </section>
             )
-          ) : activeTab === 'licensing' ? (
-            <LicensingPanel />
           ) : activeTab === 'updates' ? (
             <UpdatesPanel />
           ) : (
             <div className="rp-panel-stack">
               {/* Real-time Mini Overlay Preview on Appearance Tab */}
               {activeTab === 'appearance' && <LiveOverlayPreview />}
+
+              {/* OS-Aware Native Keybinding Preset Bar on Keybindings Tab */}
+              {activeTab === 'keybindings' && (
+                <div className="rp-status-card rp-status-card--updates">
+                  <div className="rp-status-icon">
+                    <Laptop size={20} />
+                  </div>
+                  <div className="rp-status-body">
+                    <div className="rp-status-headline">
+                      Native {platform.displayName} Keybindings
+                    </div>
+                    <p className="rp-status-sub">
+                      RatPoison automatically configures conflict-free defaults for your detected OS.
+                      Apply any OS preset below or click any shortcut to rebind it.
+                    </p>
+                  </div>
+                  <div className="rp-os-preset-actions">
+                    {(['macos', 'windows', 'linux'] as PlatformOs[]).map((osOption) => {
+                      const label =
+                        osOption === 'macos' ? 'macOS' : osOption === 'windows' ? 'Windows' : 'Linux';
+                      const isNative = osOption === platform.os;
+                      return (
+                        <button
+                          key={osOption}
+                          type="button"
+                          className={`rp-btn ${isNative ? 'rp-btn--primary' : 'rp-btn--secondary'}`}
+                          onClick={() => void applyOsKeybindPreset(osOption)}
+                          title={isNative ? `Detected OS (${platform.displayName})` : `Apply ${label} keybindings`}
+                        >
+                          {label}
+                          {isNative ? ' (Auto)' : ''}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {activeTabSections.map(([sectionName, items]) => (
                 <section key={sectionName} className="rp-section-card">

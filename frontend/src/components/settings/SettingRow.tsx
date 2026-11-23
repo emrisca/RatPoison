@@ -1,6 +1,5 @@
 import type { MouseEvent, ReactNode } from 'react';
 import {
-  DEFAULT_CONFIG,
   SETTING_MAP,
   formatSettingValue,
   getByPath,
@@ -36,14 +35,15 @@ function HighlightText({ text, query }: { text: string; query?: string }) {
  */
 export function SettingRow({ path, children, highlightQuery, badgeText }: SettingRowProps) {
   const config = useSettingsStore((s) => s.config);
+  const defaultConfig = useSettingsStore((s) => s.defaultConfig);
   const openContextMenu = useSettingsStore((s) => s.openContextMenu);
   const resetSettingKey = useSettingsStore((s) => s.resetSettingKey);
 
   const descriptor = SETTING_MAP[path];
   const label = descriptor?.label ?? path;
   const description = descriptor?.description ?? '';
-  const modified = isModifiedPath(config, path);
-  const defaultVal = getByPath(DEFAULT_CONFIG, path);
+  const modified = isModifiedPath(config, path, defaultConfig);
+  const defaultVal = getByPath(defaultConfig, path);
 
   const handleContextMenu = (e: MouseEvent<HTMLDivElement>) => {
     e.preventDefault();

@@ -1,6 +1,64 @@
-import type { RatPoisonConfig, SettingsTabId } from '../types/ipc';
+import type { PlatformOs, RatPoisonConfig, SettingsTabId } from '../types/ipc';
 
-export const DEFAULT_CONFIG: RatPoisonConfig = {
+export const OS_KEYBINDING_PRESETS: Record<PlatformOs, RatPoisonConfig['keybindings']> = {
+  macos: {
+    toggleGrid: 'Option+Space',
+    toggleLabelMode: 'Option+Shift+Space',
+    toggleFreeMode: 'Option+F',
+    leftClick: 'Space',
+    rightClick: 'Shift+Space',
+    middleClick: 'Option+M',
+    doubleClick: 'Enter',
+    holdDrag: 'Shift',
+    cycleMonitor: 'Tab',
+    openSettings: 'Cmd+,',
+  },
+  windows: {
+    toggleGrid: 'Ctrl+Alt+Space',
+    toggleLabelMode: 'Ctrl+Alt+Shift+Space',
+    toggleFreeMode: 'Ctrl+Alt+F',
+    leftClick: 'Space',
+    rightClick: 'Shift+Space',
+    middleClick: 'Alt+M',
+    doubleClick: 'Enter',
+    holdDrag: 'Shift',
+    cycleMonitor: 'Tab',
+    openSettings: 'Ctrl+,',
+  },
+  linux: {
+    toggleGrid: 'Super+Alt+Space',
+    toggleLabelMode: 'Super+Alt+Shift+Space',
+    toggleFreeMode: 'Super+Alt+F',
+    leftClick: 'Space',
+    rightClick: 'Shift+Space',
+    middleClick: 'Alt+M',
+    doubleClick: 'Enter',
+    holdDrag: 'Shift',
+    cycleMonitor: 'Tab',
+    openSettings: 'Ctrl+,',
+  },
+};
+
+export function detectClientOs(): PlatformOs {
+  if (typeof navigator === 'undefined') return 'linux';
+  const ua = `${navigator.userAgent} ${navigator.platform ?? ''}`.toLowerCase();
+  if (ua.includes('mac')) return 'macos';
+  if (ua.includes('win')) return 'windows';
+  return 'linux';
+}
+
+export function getPlatformLabel(os: PlatformOs): string {
+  switch (os) {
+    case 'macos':
+      return 'macOS';
+    case 'windows':
+      return 'Windows';
+    default:
+      return 'Linux';
+  }
+}
+
+const BASE_DEFAULT_CONFIG: Omit<RatPoisonConfig, 'keybindings'> = {
   general: {
     launchAtLogin: true,
     showTrayIcon: true,
@@ -54,18 +112,6 @@ export const DEFAULT_CONFIG: RatPoisonConfig = {
     showElementRoleHint: true,
     badgePlacement: 'smart',
   },
-  keybindings: {
-    toggleGrid: 'Cmd+Shift+G',
-    toggleLabelMode: 'Cmd+Shift+L',
-    toggleFreeMode: 'Cmd+Shift+F',
-    leftClick: 'Space',
-    rightClick: 'Shift+Space',
-    middleClick: 'Alt+Space',
-    doubleClick: 'Enter',
-    holdDrag: 'Cmd+Space',
-    cycleMonitor: 'Tab',
-    openSettings: 'Cmd+,',
-  },
   appearance: {
     theme: 'dark',
     gridBgColor: '#0b0e14',
@@ -101,6 +147,15 @@ export const DEFAULT_CONFIG: RatPoisonConfig = {
     autoDownload: false,
   },
 };
+
+export function getDefaultConfigForOs(os: PlatformOs): RatPoisonConfig {
+  return {
+    ...structuredClone(BASE_DEFAULT_CONFIG),
+    keybindings: { ...OS_KEYBINDING_PRESETS[os] },
+  };
+}
+
+export const DEFAULT_CONFIG: RatPoisonConfig = getDefaultConfigForOs(detectClientOs());
 
 export interface SettingDescriptor {
   /** Dotted key path matching RatPoisonConfig and Rust `reset_setting_key`. */
@@ -146,11 +201,6 @@ export const SETTINGS_TABS: Array<{
     id: 'appearance',
     label: 'Appearance',
     shortDescription: 'Live colors, opacity, typography, and real-time overlay preview.',
-  },
-  {
-    id: 'licensing',
-    label: 'Licensing',
-    shortDescription: 'Trial status, 5-machine license activation, and offline challenge-response.',
   },
   {
     id: 'updates',
@@ -256,8 +306,8 @@ export const SETTING_REGISTRY: SettingDescriptor[] = [
 
   // Updates
   { path: 'updates.channel', tab: 'updates', section: 'Release Channel', label: 'Update channel', description: 'Track Stable releases or opt into Beta builds.', keywords: ['stable', 'beta', 'release', 'channel'] },
-  { path: 'updates.autoCheck', tab: 'updates', section: 'Automation', label: 'Check for updates automatically', description: 'Periodically check signed release manifests on startup.', keywords: ['auto', 'check', 'updates'] },
-  { path: 'updates.autoDownload', tab: 'updates', section: 'Automation', label: 'Download updates in background', description: 'Pre-fetch verified update packages ready for restart.', keywords: ['download', 'background', 'updates'] },
+  { path: 'updates.autoCheck', tab: 'updates', section: 'Automation', label: 'Check for updates automatically', description: 'Periodically check GitHub Releases on startup.', keywords: ['auto', 'check', 'updates'] },
+  { path: 'updates.autoDownload', tab: 'updates', section: 'Automation', label: 'Download updates in background', description: 'Pre-fetch release packages ready for restart.', keywords: ['download', 'background', 'updates'] },
 ];
 
 export const SETTING_MAP: Record<string, SettingDescriptor> = Object.fromEntries(
@@ -290,14 +340,24 @@ export function setByPath<T extends object>(obj: T, path: string, value: unknown
   return clone;
 }
 
-export function isModifiedPath(config: RatPoisonConfig, path: string): boolean {
+export function isModifiedPath(
+  config: RatPoisonConfig,
+  path: string,
+  defaults: RatPoisonConfig = DEFAULT_CONFIG,
+): boolean {
   const current = getByPath(config, path);
-  const def = getByPath(DEFAULT_CONFIG, path);
+  const def = getByPath(defaults, path);
   return JSON.stringify(current) !== JSON.stringify(def);
 }
 
-export function getModifiedPathsForTab(config: RatPoisonConfig, tab: SettingsTabId): string[] {
-  return SETTING_REGISTRY.filter((s) => s.tab === tab && isModifiedPath(config, s.path)).map((s) => s.path);
+export function getModifiedPathsForTab(
+  config: RatPoisonConfig,
+  tab: SettingsTabId,
+  defaults: RatPoisonConfig = DEFAULT_CONFIG,
+): string[] {
+  return SETTING_REGISTRY.filter((s) => s.tab === tab && isModifiedPath(config, s.path, defaults)).map(
+    (s) => s.path,
+  );
 }
 
 export function formatSettingValue(value: unknown): string {

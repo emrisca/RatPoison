@@ -1,17 +1,23 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { DEFAULT_CONFIG, getByPath, setByPath } from '../config/defaults';
+import {
+  DEFAULT_CONFIG,
+  OS_KEYBINDING_PRESETS,
+  detectClientOs,
+  getByPath,
+  getPlatformLabel,
+  setByPath,
+} from '../config/defaults';
 import {
   TAURI_COMMANDS,
   TAURI_EVENTS,
   type GridCell,
   type LabelBadge,
-  type LicenseStatus,
   type MonitorInfo,
-  type OfflineChallenge,
   type OverlayMode,
   type OverlayStatePayload,
+  type PlatformInfo,
   type RatPoisonConfig,
   type UpdateCheckResult,
 } from '../types/ipc';
@@ -62,16 +68,6 @@ export async function enforceOverlayClickThrough(): Promise<void> {
 // Browser-dev fallback state (used only when running Vite outside Tauri)
 // ---------------------------------------------------------------------------
 let mockConfig: RatPoisonConfig = structuredClone(DEFAULT_CONFIG);
-let mockLicenseStatus: LicenseStatus = {
-  state: 'trial',
-  licenseKeyMasked: null,
-  trialDaysRemaining: 14,
-  machinesUsed: 1,
-  machinesMax: 5,
-  machineId: 'RP-MAC-A1B2-C3D4-E5F6',
-  activatedAt: null,
-  expiresAt: new Date(Date.now() + 14 * 86_400_000).toISOString(),
-};
 
 const MOCK_MONITORS: MonitorInfo[] = [
   {
@@ -115,98 +111,53 @@ function deepMergeDefaults<T extends object>(defaults: T, incoming: Partial<T> |
 // Typed Tauri Command Wrappers
 // ---------------------------------------------------------------------------
 
-export async function ipcGetConfig(): Promise<RatPoisonConfig> {
-  if (!isTauriRuntime()) return structuredClone(mockConfig);
-  const raw = await invoke<Partial<RatPoisonConfig>>(TAURI_COMMANDS.GET_CONFIG);
-  return deepMergeDefaults(DEFAULT_CONFIG, raw);
+export async function ipcGetPlatformInfo(): Promise<PlatformInfo> {
+  if (!isTauriRuntime()) {
+    const os = detectClientOs();
+    return {
+      os,
+      arch: 'web',
+      displayName: `${getPlatformLabel(os)} (Browser Preview)`,
+      defaultKeybindings: { ...OS_KEYBINDING_PRESETS[os] },
+    };
+  }
+  return invoke<PlatformInfo>(TAURI_COMMANDS.GET_PLATFORM_INFO);
 }
 
-export async function ipcUpdateConfig(config: RatPoisonConfig): Promise<RatPoisonConfig> {
+export async function ipcGetConfig(defaults: RatPoisonConfig = DEFAULT_CONFIG): Promise<RatPoisonConfig> {
+  if (!isTauriRuntime()) return structuredClone(mockConfig);
+  const raw = await invoke<Partial<RatPoisonConfig>>(TAURI_COMMANDS.GET_CONFIG);
+  return deepMergeDefaults(defaults, raw);
+}
+
+export async function ipcUpdateConfig(
+  config: RatPoisonConfig,
+  defaults: RatPoisonConfig = DEFAULT_CONFIG,
+): Promise<RatPoisonConfig> {
   if (!isTauriRuntime()) {
     mockConfig = structuredClone(config);
     return structuredClone(mockConfig);
   }
   const updated = await invoke<Partial<RatPoisonConfig>>(TAURI_COMMANDS.UPDATE_CONFIG, { config });
-  return deepMergeDefaults(DEFAULT_CONFIG, updated ?? config);
+  return deepMergeDefaults(defaults, updated ?? config);
 }
 
-export async function ipcResetSettingKey(key: string): Promise<RatPoisonConfig> {
+export async function ipcResetSettingKey(
+  key: string,
+  defaults: RatPoisonConfig = DEFAULT_CONFIG,
+): Promise<RatPoisonConfig> {
   if (!isTauriRuntime()) {
-    const defVal = getByPath(DEFAULT_CONFIG, key);
+    const defVal = getByPath(defaults, key);
     mockConfig = setByPath(mockConfig, key, defVal);
     return structuredClone(mockConfig);
   }
   const updated = await invoke<Partial<RatPoisonConfig>>(TAURI_COMMANDS.RESET_SETTING_KEY, { key });
-  return deepMergeDefaults(DEFAULT_CONFIG, updated);
+  return deepMergeDefaults(defaults, updated);
 }
 
 export async function ipcGetMonitors(): Promise<MonitorInfo[]> {
   if (!isTauriRuntime()) return MOCK_MONITORS;
   return invoke<MonitorInfo[]>(TAURI_COMMANDS.GET_MONITORS);
-}
-
-export async function ipcGetLicenseStatus(): Promise<LicenseStatus> {
-  if (!isTauriRuntime()) return { ...mockLicenseStatus };
-  return invoke<LicenseStatus>(TAURI_COMMANDS.GET_LICENSE_STATUS);
-}
-
-export async function ipcActivateLicense(licenseKey: string): Promise<LicenseStatus> {
-  if (!isTauriRuntime()) {
-    const trimmed = licenseKey.trim();
-    if (trimmed.length < 8) {
-      throw new Error('Invalid license key format. Expected at least 8 characters.');
-    }
-    mockLicenseStatus = {
-      ...mockLicenseStatus,
-      state: 'licensed',
-      licenseKeyMasked: `${trimmed.slice(0, 4)}-****-****-${trimmed.slice(-4)}`,
-      machinesUsed: Math.min(mockLicenseStatus.machinesUsed + 1, 5),
-      activatedAt: new Date().toISOString(),
-    };
-    return { ...mockLicenseStatus };
-  }
-  return invoke<LicenseStatus>(TAURI_COMMANDS.ACTIVATE_LICENSE, { licenseKey });
-}
-
-export async function ipcDeactivateMachine(): Promise<LicenseStatus> {
-  if (!isTauriRuntime()) {
-    mockLicenseStatus = {
-      ...mockLicenseStatus,
-      state: 'trial',
-      licenseKeyMasked: null,
-      machinesUsed: Math.max(mockLicenseStatus.machinesUsed - 1, 0),
-      activatedAt: null,
-    };
-    return { ...mockLicenseStatus };
-  }
-  return invoke<LicenseStatus>(TAURI_COMMANDS.DEACTIVATE_MACHINE);
-}
-
-export async function ipcGenerateOfflineChallenge(): Promise<OfflineChallenge> {
-  if (!isTauriRuntime()) {
-    return {
-      challengeCode: 'RP-CHLG-8F4A-22C1-90DE-7B11-3E09',
-      machineFingerprint: mockLicenseStatus.machineId,
-      issuedAt: new Date().toISOString(),
-    };
-  }
-  return invoke<OfflineChallenge>(TAURI_COMMANDS.GENERATE_OFFLINE_CHALLENGE);
-}
-
-export async function ipcApplyOfflineResponse(responseBlob: string): Promise<LicenseStatus> {
-  if (!isTauriRuntime()) {
-    if (responseBlob.trim().length < 16) {
-      throw new Error('Signed offline response payload appears truncated or invalid.');
-    }
-    mockLicenseStatus = {
-      ...mockLicenseStatus,
-      state: 'offline-licensed',
-      licenseKeyMasked: 'OFFLINE-ED25519-VERIFIED',
-      activatedAt: new Date().toISOString(),
-    };
-    return { ...mockLicenseStatus };
-  }
-  return invoke<LicenseStatus>(TAURI_COMMANDS.APPLY_OFFLINE_RESPONSE, { responseBlob });
 }
 
 export async function ipcCheckForUpdates(channel: string): Promise<UpdateCheckResult> {

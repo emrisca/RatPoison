@@ -1,6 +1,6 @@
 //! Cross-crate integration, multi-monitor DPI precision, and Memory Hygiene security verification suite.
 //!
-//! This crate bridges `ratpoison-core`, `ratpoison-hid`, `ratpoison-a11y`, and `ratpoison-license`
+//! This crate bridges `ratpoison-core`, `ratpoison-hid`, and `ratpoison-a11y`
 //! by providing type conversion helpers across independently defined crate boundary primitives
 //! (`LogicalPoint`, `LogicalRect`, `PhysicalPoint`, `MouseButton`, `ClickKind`, `SpeedTier`,
 //! and `LabelBadge`).

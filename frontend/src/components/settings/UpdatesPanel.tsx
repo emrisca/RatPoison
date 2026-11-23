@@ -3,7 +3,7 @@ import { useSettingsStore } from '../../store/useSettingsStore';
 import { SettingControlByPath } from './SettingControls';
 
 /**
- * Updates tab view combining release channel controls with signed updater status.
+ * Updates tab view combining release channel controls with GitHub Releases status.
  */
 export function UpdatesPanel() {
   const updateResult = useSettingsStore((s) => s.updateResult);
@@ -25,7 +25,7 @@ export function UpdatesPanel() {
               ? updateResult.updateAvailable
                 ? `Version v${updateResult.latestVersion} is ready to install.`
                 : 'You are on the latest verified build.'
-              : 'All releases are Ed25519-signed and verified before installation.'}
+              : 'Free & open-source (MIT). Check GitHub Releases for the latest builds.'}
           </p>
         </div>
         <button

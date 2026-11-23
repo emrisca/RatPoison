@@ -906,7 +906,7 @@
   color: var(--rp-accent);
 }
 
-/* Licensing & Updates Status Cards */
+/* Updates & Platform Status Cards */
 .rp-status-card {
   display: flex;
   align-items: center;
@@ -1162,4 +1162,12 @@
   font-weight: 600;
   box-shadow: var(--rp-shadow-toast);
   z-index: 900;
+}
+
+.rp-os-preset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
 }

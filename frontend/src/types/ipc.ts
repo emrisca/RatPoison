@@ -206,23 +206,13 @@ export interface RatPoisonConfig {
   };
 }
 
-export type LicenseStateKind = 'trial' | 'licensed' | 'expired' | 'offline-licensed';
+export type PlatformOs = 'macos' | 'windows' | 'linux';
 
-export interface LicenseStatus {
-  state: LicenseStateKind;
-  licenseKeyMasked: string | null;
-  trialDaysRemaining: number;
-  machinesUsed: number;
-  machinesMax: number;
-  machineId: string;
-  activatedAt: string | null;
-  expiresAt: string | null;
-}
-
-export interface OfflineChallenge {
-  challengeCode: string;
-  machineFingerprint: string;
-  issuedAt: string;
+export interface PlatformInfo {
+  os: PlatformOs;
+  arch: string;
+  displayName: string;
+  defaultKeybindings: RatPoisonConfig['keybindings'];
 }
 
 export interface UpdateCheckResult {
@@ -241,7 +231,6 @@ export type SettingsTabId =
   | 'labelMode'
   | 'keybindings'
   | 'appearance'
-  | 'licensing'
   | 'updates';
 
 export const TAURI_EVENTS = {
@@ -254,10 +243,6 @@ export const TAURI_COMMANDS = {
   UPDATE_CONFIG: 'update_config',
   RESET_SETTING_KEY: 'reset_setting_key',
   GET_MONITORS: 'get_monitors',
-  GET_LICENSE_STATUS: 'get_license_status',
-  ACTIVATE_LICENSE: 'activate_license',
-  DEACTIVATE_MACHINE: 'deactivate_machine',
-  GENERATE_OFFLINE_CHALLENGE: 'generate_offline_challenge',
-  APPLY_OFFLINE_RESPONSE: 'apply_offline_response',
+  GET_PLATFORM_INFO: 'get_platform_info',
   CHECK_FOR_UPDATES: 'check_for_updates',
 } as const;

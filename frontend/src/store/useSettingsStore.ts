@@ -1,21 +1,26 @@
 import { create } from 'zustand';
-import { DEFAULT_CONFIG, getByPath, getModifiedPathsForTab, setByPath } from '../config/defaults';
 import {
-  ipcActivateLicense,
-  ipcApplyOfflineResponse,
+  DEFAULT_CONFIG,
+  OS_KEYBINDING_PRESETS,
+  detectClientOs,
+  getByPath,
+  getDefaultConfigForOs,
+  getModifiedPathsForTab,
+  getPlatformLabel,
+  setByPath,
+} from '../config/defaults';
+import {
   ipcCheckForUpdates,
-  ipcDeactivateMachine,
-  ipcGenerateOfflineChallenge,
   ipcGetConfig,
-  ipcGetLicenseStatus,
   ipcGetMonitors,
+  ipcGetPlatformInfo,
   ipcResetSettingKey,
   ipcUpdateConfig,
 } from '../ipc/tauriBridge';
 import type {
-  LicenseStatus,
   MonitorInfo,
-  OfflineChallenge,
+  PlatformInfo,
+  PlatformOs,
   RatPoisonConfig,
   SettingsTabId,
   UpdateCheckResult,
@@ -30,10 +35,10 @@ export interface ContextMenuState {
 }
 
 export interface SettingsStoreState {
+  platform: PlatformInfo;
+  defaultConfig: RatPoisonConfig;
   config: RatPoisonConfig;
   monitors: MonitorInfo[];
-  licenseStatus: LicenseStatus | null;
-  offlineChallenge: OfflineChallenge | null;
   updateResult: UpdateCheckResult | null;
   activeTab: SettingsTabId;
   searchQuery: string;
@@ -51,17 +56,22 @@ export interface SettingsStoreState {
   resetSettingKey: (path: string) => Promise<void>;
   resetTabToDefaults: (tab: SettingsTabId) => Promise<void>;
   resetAllDefaults: () => Promise<void>;
+  applyOsKeybindPreset: (os?: PlatformOs) => Promise<void>;
 
   openContextMenu: (x: number, y: number, settingPath: string, settingLabel: string) => void;
   closeContextMenu: () => void;
 
-  activateLicense: (licenseKey: string) => Promise<void>;
-  deactivateMachine: () => Promise<void>;
-  generateOfflineChallenge: () => Promise<void>;
-  applyOfflineResponse: (responseBlob: string) => Promise<void>;
   checkForUpdates: () => Promise<void>;
   clearFeedback: () => void;
 }
+
+const initialOs = detectClientOs();
+const initialPlatform: PlatformInfo = {
+  os: initialOs,
+  arch: '',
+  displayName: getPlatformLabel(initialOs),
+  defaultKeybindings: { ...OS_KEYBINDING_PRESETS[initialOs] },
+};
 
 let toastTimer: number | null = null;
 
@@ -76,10 +86,10 @@ function scheduleToastClear(set: (partial: Partial<SettingsStoreState>) => void)
 }
 
 export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
+  platform: initialPlatform,
+  defaultConfig: structuredClone(DEFAULT_CONFIG),
   config: structuredClone(DEFAULT_CONFIG),
   monitors: [],
-  licenseStatus: null,
-  offlineChallenge: null,
   updateResult: null,
   activeTab: 'general',
   searchQuery: '',
@@ -98,12 +108,16 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   loadInitialData: async () => {
     set({ loading: true, errorMessage: null });
     try {
-      const [config, monitors, licenseStatus] = await Promise.all([
-        ipcGetConfig(),
+      const platform = await ipcGetPlatformInfo();
+      const defaultConfig: RatPoisonConfig = {
+        ...getDefaultConfigForOs(platform.os),
+        keybindings: { ...platform.defaultKeybindings },
+      };
+      const [config, monitors] = await Promise.all([
+        ipcGetConfig(defaultConfig),
         ipcGetMonitors(),
-        ipcGetLicenseStatus(),
       ]);
-      set({ config, monitors, licenseStatus, loading: false });
+      set({ platform, defaultConfig, config, monitors, loading: false });
     } catch (err) {
       set({
         loading: false,
@@ -120,10 +134,11 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
 
   updateSetting: async (path, value) => {
     const previous = get().config;
+    const defaults = get().defaultConfig;
     const optimistic = setByPath(previous, path, value);
     set({ config: optimistic, errorMessage: null });
     try {
-      const synced = await ipcUpdateConfig(optimistic);
+      const synced = await ipcUpdateConfig(optimistic, defaults);
       set({ config: synced });
     } catch (err) {
       set({
@@ -135,11 +150,12 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
 
   resetSettingKey: async (path) => {
     const previous = get().config;
-    const defaultValue = getByPath(DEFAULT_CONFIG, path);
+    const defaults = get().defaultConfig;
+    const defaultValue = getByPath(defaults, path);
     const optimistic = setByPath(previous, path, defaultValue);
     set({ config: optimistic, errorMessage: null });
     try {
-      const synced = await ipcResetSettingKey(path);
+      const synced = await ipcResetSettingKey(path, defaults);
       set({ config: synced, toastMessage: `Restored default for ${path}` });
       scheduleToastClear(set);
     } catch (err) {
@@ -151,16 +167,17 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   },
 
   resetTabToDefaults: async (tab) => {
-    const modified = getModifiedPathsForTab(get().config, tab);
+    const defaults = get().defaultConfig;
+    const modified = getModifiedPathsForTab(get().config, tab, defaults);
     if (modified.length === 0) return;
 
     let nextConfig = get().config;
     for (const path of modified) {
-      nextConfig = setByPath(nextConfig, path, getByPath(DEFAULT_CONFIG, path));
+      nextConfig = setByPath(nextConfig, path, getByPath(defaults, path));
     }
     set({ config: nextConfig, errorMessage: null });
     try {
-      const synced = await ipcUpdateConfig(nextConfig);
+      const synced = await ipcUpdateConfig(nextConfig, defaults);
       set({
         config: synced,
         toastMessage: `Restored ${modified.length} setting${modified.length === 1 ? '' : 's'} to default`,
@@ -174,15 +191,43 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   },
 
   resetAllDefaults: async () => {
-    const fresh = structuredClone(DEFAULT_CONFIG);
+    const defaults = get().defaultConfig;
+    const fresh = structuredClone(defaults);
     set({ config: fresh, errorMessage: null });
     try {
-      const synced = await ipcUpdateConfig(fresh);
-      set({ config: synced, toastMessage: 'All settings restored to factory defaults' });
+      const synced = await ipcUpdateConfig(fresh, defaults);
+      set({ config: synced, toastMessage: 'All settings restored to native defaults' });
       scheduleToastClear(set);
     } catch (err) {
       set({
-        errorMessage: err instanceof Error ? err.message : 'Failed to restore factory defaults',
+        errorMessage: err instanceof Error ? err.message : 'Failed to restore defaults',
+      });
+    }
+  },
+
+  applyOsKeybindPreset: async (os) => {
+    const { platform, config, defaultConfig } = get();
+    const targetOs = os ?? platform.os;
+    const preset =
+      targetOs === platform.os
+        ? { ...platform.defaultKeybindings }
+        : { ...OS_KEYBINDING_PRESETS[targetOs] };
+    const nextConfig: RatPoisonConfig = {
+      ...structuredClone(config),
+      keybindings: preset,
+    };
+    set({ config: nextConfig, errorMessage: null });
+    try {
+      const synced = await ipcUpdateConfig(nextConfig, defaultConfig);
+      set({
+        config: synced,
+        toastMessage: `Applied ${getPlatformLabel(targetOs)} keybindings`,
+      });
+      scheduleToastClear(set);
+    } catch (err) {
+      set({
+        config,
+        errorMessage: err instanceof Error ? err.message : 'Failed to apply OS keybinding preset',
       });
     }
   },
@@ -196,66 +241,6 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
     set((state) => ({
       contextMenu: { ...state.contextMenu, open: false },
     })),
-
-  activateLicense: async (licenseKey) => {
-    set({ busyAction: 'activate', errorMessage: null });
-    try {
-      const licenseStatus = await ipcActivateLicense(licenseKey);
-      set({ licenseStatus, busyAction: null, toastMessage: 'License activated successfully' });
-      scheduleToastClear(set);
-    } catch (err) {
-      set({
-        busyAction: null,
-        errorMessage: err instanceof Error ? err.message : 'License activation failed',
-      });
-    }
-  },
-
-  deactivateMachine: async () => {
-    set({ busyAction: 'deactivate', errorMessage: null });
-    try {
-      const licenseStatus = await ipcDeactivateMachine();
-      set({ licenseStatus, busyAction: null, toastMessage: 'Machine seat released' });
-      scheduleToastClear(set);
-    } catch (err) {
-      set({
-        busyAction: null,
-        errorMessage: err instanceof Error ? err.message : 'Deactivation failed',
-      });
-    }
-  },
-
-  generateOfflineChallenge: async () => {
-    set({ busyAction: 'challenge', errorMessage: null });
-    try {
-      const offlineChallenge = await ipcGenerateOfflineChallenge();
-      set({ offlineChallenge, busyAction: null, toastMessage: 'Offline challenge generated' });
-      scheduleToastClear(set);
-    } catch (err) {
-      set({
-        busyAction: null,
-        errorMessage: err instanceof Error ? err.message : 'Failed to generate offline challenge',
-      });
-    }
-  },
-
-  applyOfflineResponse: async (responseBlob) => {
-    set({ busyAction: 'offline-apply', errorMessage: null });
-    try {
-      const licenseStatus = await ipcApplyOfflineResponse(responseBlob);
-      set({
-        licenseStatus,
-        busyAction: null,
-        toastMessage: 'Offline signed license verified and activated',
-      });
-      scheduleToastClear(set);
-    } catch (err) {
-      set({
-        busyAction: null,
-        errorMessage: err instanceof Error ? err.message : 'Offline verification failed',
-      });
-    }
-  },
 
   checkForUpdates: async () => {
     set({ busyAction: 'updates', errorMessage: null });

@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Copy, RotateCcw } from 'lucide-react';
 import {
-  DEFAULT_CONFIG,
   formatSettingValue,
   getByPath,
   isModifiedPath,
@@ -14,6 +13,7 @@ import { useSettingsStore } from '../../store/useSettingsStore';
 export function RestoreContextMenu() {
   const contextMenu = useSettingsStore((s) => s.contextMenu);
   const config = useSettingsStore((s) => s.config);
+  const defaultConfig = useSettingsStore((s) => s.defaultConfig);
   const closeContextMenu = useSettingsStore((s) => s.closeContextMenu);
   const resetSettingKey = useSettingsStore((s) => s.resetSettingKey);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -46,8 +46,8 @@ export function RestoreContextMenu() {
 
   const { settingPath, settingLabel } = contextMenu;
   const currentValue = getByPath(config, settingPath);
-  const defaultValue = getByPath(DEFAULT_CONFIG, settingPath);
-  const modified = isModifiedPath(config, settingPath);
+  const defaultValue = getByPath(defaultConfig, settingPath);
+  const modified = isModifiedPath(config, settingPath, defaultConfig);
 
   // Clamp coordinates so menu never overflows right/bottom window edges
   const menuW = 248;

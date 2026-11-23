@@ -5,7 +5,6 @@ use ratpoison_core::{
     EngineMode, LogicalPoint, LogicalRect, MonitorInfo, OverlaySnapshot, PhysicalPoint, RatPoisonConfig,
     SpeedModifier, SpeedTier,
 };
-use ratpoison_license::{ActivationMode, LicenseState, MAX_MACHINES};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::fs;
@@ -137,23 +136,106 @@ pub struct OverlayStatePayloadDto {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LicenseStatusDto {
-    pub state: String,
-    pub license_key_masked: Option<String>,
-    pub trial_days_remaining: u32,
-    pub machines_used: usize,
-    pub machines_max: usize,
-    pub machine_id: String,
-    pub activated_at: Option<String>,
-    pub expires_at: Option<String>,
+pub struct KeybindingsDto {
+    pub toggle_grid: String,
+    pub toggle_label_mode: String,
+    pub toggle_free_mode: String,
+    pub left_click: String,
+    pub right_click: String,
+    pub middle_click: String,
+    pub double_click: String,
+    pub hold_drag: String,
+    pub cycle_monitor: String,
+    pub open_settings: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct OfflineChallengeDto {
-    pub challenge_code: String,
-    pub machine_fingerprint: String,
-    pub issued_at: String,
+pub struct PlatformInfoDto {
+    /// Canonical OS identifier: `"macos"`, `"windows"`, or `"linux"`.
+    pub os: String,
+    /// CPU architecture from `std::env::consts::ARCH` (e.g. `"aarch64"`, `"x86_64"`).
+    pub arch: String,
+    /// Human-readable machine label (e.g. `"macOS (Apple Silicon)"`).
+    pub display_name: String,
+    /// Native OS-tailored default keybindings automatically chosen for this machine.
+    pub default_keybindings: KeybindingsDto,
+}
+
+/// Returns the canonical OS string for the running machine.
+pub fn detect_os() -> &'static str {
+    match std::env::consts::OS {
+        "macos" => "macos",
+        "windows" => "windows",
+        _ => "linux",
+    }
+}
+
+/// Builds conflict-free, ergonomic default keybindings tailored for the target OS.
+pub fn default_keybindings_for_os(os: &str) -> KeybindingsDto {
+    match os {
+        "macos" => KeybindingsDto {
+            toggle_grid: "Option+Space".to_string(),
+            toggle_label_mode: "Option+Shift+Space".to_string(),
+            toggle_free_mode: "Option+F".to_string(),
+            left_click: "Space".to_string(),
+            right_click: "Shift+Space".to_string(),
+            middle_click: "Option+M".to_string(),
+            double_click: "Enter".to_string(),
+            hold_drag: "Shift".to_string(),
+            cycle_monitor: "Tab".to_string(),
+            open_settings: "Cmd+,".to_string(),
+        },
+        "windows" => KeybindingsDto {
+            // Avoids Windows native `Alt+Space` system window menu & `Win+Space` layout switcher.
+            toggle_grid: "Ctrl+Alt+Space".to_string(),
+            toggle_label_mode: "Ctrl+Alt+Shift+Space".to_string(),
+            toggle_free_mode: "Ctrl+Alt+F".to_string(),
+            left_click: "Space".to_string(),
+            right_click: "Shift+Space".to_string(),
+            middle_click: "Alt+M".to_string(),
+            double_click: "Enter".to_string(),
+            hold_drag: "Shift".to_string(),
+            cycle_monitor: "Tab".to_string(),
+            open_settings: "Ctrl+,".to_string(),
+        },
+        _ => KeybindingsDto {
+            // Linux: avoids GNOME/KDE `Super+Space` input switcher & `Alt+Space` window menu.
+            toggle_grid: "Super+Alt+Space".to_string(),
+            toggle_label_mode: "Super+Alt+Shift+Space".to_string(),
+            toggle_free_mode: "Super+Alt+F".to_string(),
+            left_click: "Space".to_string(),
+            right_click: "Shift+Space".to_string(),
+            middle_click: "Alt+M".to_string(),
+            double_click: "Enter".to_string(),
+            hold_drag: "Shift".to_string(),
+            cycle_monitor: "Tab".to_string(),
+            open_settings: "Ctrl+,".to_string(),
+        },
+    }
+}
+
+/// Detects the current host OS and architecture alongside its native default keybinding preset.
+pub fn detect_platform_info() -> PlatformInfoDto {
+    let os = detect_os();
+    let arch = std::env::consts::ARCH;
+    let display_name = match (os, arch) {
+        ("macos", "aarch64") => "macOS (Apple Silicon)".to_string(),
+        ("macos", "x86_64") => "macOS (Intel)".to_string(),
+        ("macos", _) => format!("macOS ({arch})"),
+        ("windows", "x86_64") => "Windows (x64)".to_string(),
+        ("windows", "aarch64") => "Windows (ARM64)".to_string(),
+        ("windows", _) => format!("Windows ({arch})"),
+        (_, "x86_64") => "Linux (x64)".to_string(),
+        (_, "aarch64") => "Linux (ARM64)".to_string(),
+        (_, _) => format!("Linux ({arch})"),
+    };
+    PlatformInfoDto {
+        os: os.to_string(),
+        arch: arch.to_string(),
+        display_name,
+        default_keybindings: default_keybindings_for_os(os),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -400,98 +482,10 @@ pub fn project_snapshot_to_overlay_payload(
     }
 }
 
-/// Translates `ratpoison_license::LicenseState` into the frontend `LicenseStatus` DTO.
-pub fn license_state_to_dto(
-    state: &LicenseState,
-    machine_fingerprint: &str,
-    machines_used: usize,
-) -> LicenseStatusDto {
-    let short_machine_id = if machine_fingerprint.len() >= 16 {
-        format!("RP-{}", machine_fingerprint[..16].to_uppercase())
-    } else {
-        format!("RP-{}", machine_fingerprint.to_uppercase())
-    };
-
-    match state {
-        LicenseState::UnstartedTrial => LicenseStatusDto {
-            state: "trial".to_string(),
-            license_key_masked: None,
-            trial_days_remaining: 14,
-            machines_used: machines_used.max(1),
-            machines_max: MAX_MACHINES,
-            machine_id: short_machine_id,
-            activated_at: None,
-            expires_at: None,
-        },
-        LicenseState::TrialActive {
-            expires_at,
-            remaining_days,
-            ..
-        } => LicenseStatusDto {
-            state: "trial".to_string(),
-            license_key_masked: None,
-            trial_days_remaining: *remaining_days,
-            machines_used: machines_used.max(1),
-            machines_max: MAX_MACHINES,
-            machine_id: short_machine_id,
-            activated_at: None,
-            expires_at: Some(format_unix_iso8601(*expires_at)),
-        },
-        LicenseState::TrialExpired { expired_at, .. } => LicenseStatusDto {
-            state: "expired".to_string(),
-            license_key_masked: None,
-            trial_days_remaining: 0,
-            machines_used,
-            machines_max: MAX_MACHINES,
-            machine_id: short_machine_id,
-            activated_at: None,
-            expires_at: Some(format_unix_iso8601(*expired_at)),
-        },
-        LicenseState::ClockTampered { .. } | LicenseState::SeatLimitReached { .. } => {
-            LicenseStatusDto {
-                state: "expired".to_string(),
-                license_key_masked: None,
-                trial_days_remaining: 0,
-                machines_used,
-                machines_max: MAX_MACHINES,
-                machine_id: short_machine_id,
-                activated_at: None,
-                expires_at: None,
-            }
-        }
-        LicenseState::Licensed {
-            mode,
-            license_key_hash,
-            activated_at,
-            expires_at,
-            ..
-        } => {
-            let state_label = match mode {
-                ActivationMode::OfflineChallengeResponse => "offline-licensed",
-                ActivationMode::OnlineSeat => "licensed",
-            };
-            let suffix = if license_key_hash.len() >= 4 {
-                license_key_hash[license_key_hash.len() - 4..].to_uppercase()
-            } else {
-                "VERF".to_string()
-            };
-            LicenseStatusDto {
-                state: state_label.to_string(),
-                license_key_masked: Some(format!("RP-****-****-{suffix}")),
-                trial_days_remaining: 0,
-                machines_used: machines_used.max(1),
-                machines_max: MAX_MACHINES,
-                machine_id: short_machine_id,
-                activated_at: Some(format_unix_iso8601(*activated_at)),
-                expires_at: expires_at.map(format_unix_iso8601),
-            }
-        }
-    }
-}
-
-/// Default frontend-compatible `camelCase` settings document.
-/// Mirrors `frontend/src/config/defaults.ts` (`DEFAULT_CONFIG`).
-pub fn default_frontend_config_json() -> Value {
+/// Default frontend-compatible `camelCase` settings document for a specific OS.
+/// Mirrors `frontend/src/config/defaults.ts` (`getDefaultConfigForOs`).
+pub fn default_frontend_config_json_for_os(os: &str) -> Value {
+    let kb = default_keybindings_for_os(os);
     json!({
         "general": {
             "launchAtLogin": true,
@@ -505,22 +499,22 @@ pub fn default_frontend_config_json() -> Value {
         "grid": {
             "rows": 18,
             "cols": 26,
-            "alphabet": "abcdefghijklmnopqrstuvwxyz",
-            "caseSensitive": false,
+            "alphabet": "asdfghjklqwertyuiopzxcvbnmASDFGHJKLQWERTYUIOPZXCVBNM",
+            "caseSensitive": true,
             "enableSubgridZoom": true,
             "subgridRows": 3,
             "subgridCols": 3,
-            "subgridZoomScale": 2.4,
+            "subgridZoomScale": 1.85,
             "nudgeStepPx": 8,
             "fineNudgeStepPx": 2,
             "showSubgridCrosshair": true,
             "dimNonMatchingCells": true,
-            "dimOpacity": 0.22
+            "dimOpacity": 0.2
         },
         "freeMode": {
-            "baseSpeedPxPerSec": 680,
-            "fastMultiplier": 2.4,
-            "slowMultiplier": 0.3,
+            "baseSpeedPxPerSec": 640,
+            "fastMultiplier": 2.5,
+            "slowMultiplier": 0.25,
             "accelerationCurve": 1.35,
             "scrollSpeed": 42,
             "naturalScroll": true,
@@ -537,54 +531,43 @@ pub fn default_frontend_config_json() -> Value {
         },
         "labelMode": {
             "enabled": true,
-            "charset": "asdfghjklqwertyuiopzxcvbnm",
-            "minElementSizePx": 10,
-            "maxBadges": 350,
+            "charset": "asdfghjklqweruiopzxcvbnm",
+            "minElementSizePx": 14,
+            "maxBadges": 160,
             "collisionAvoidance": true,
             "includeMenubar": true,
             "includeDock": true,
             "showElementRoleHint": true,
             "badgePlacement": "smart"
         },
-        "keybindings": {
-            "toggleGrid": "Alt+Space",
-            "toggleLabelMode": "Alt+Shift+Space",
-            "toggleFreeMode": "Alt+F",
-            "leftClick": "Space",
-            "rightClick": "Shift+Space",
-            "middleClick": "Alt+M",
-            "doubleClick": "Enter",
-            "holdDrag": "Shift",
-            "cycleMonitor": "Tab",
-            "openSettings": "CmdOrCtrl+,"
-        },
+        "keybindings": kb,
         "appearance": {
             "theme": "dark",
-            "gridBgColor": "#0b0f17",
+            "gridBgColor": "#0b0e14",
             "gridBgOpacity": 0.42,
-            "gridLineColor": "#475569",
+            "gridLineColor": "#94a3b8",
             "gridLineWidth": 1,
             "gridTextColor": "#f8fafc",
-            "gridAccentColor": "#38bdf8",
-            "gridFontFamily": "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
+            "gridAccentColor": "#f59e0b",
+            "gridFontFamily": "\"JetBrains Mono\", \"SF Mono\", Menlo, Consolas, monospace",
             "gridFontSize": 13,
             "gridFontWeight": 600,
-            "subgridAccentColor": "#f59e0b",
+            "subgridAccentColor": "#38bdf8",
             "subgridBgColor": "#0f172a",
-            "subgridBgOpacity": 0.88,
-            "crosshairColor": "#f43f5e",
-            "labelBgColor": "#fde047",
+            "subgridBgOpacity": 0.86,
+            "crosshairColor": "#fb7185",
+            "labelBgColor": "#fef08a",
             "labelBgOpacity": 0.96,
-            "labelBorderColor": "#ca8a04",
-            "labelTextColor": "#0f172a",
-            "labelMatchPrefixColor": "#ef4444",
-            "labelFontFamily": "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
-            "labelFontSize": 11,
-            "labelBorderRadius": 4,
+            "labelBorderColor": "#a16207",
+            "labelTextColor": "#111827",
+            "labelMatchPrefixColor": "#dc2626",
+            "labelFontFamily": "\"SF Pro Text\", \"Inter\", system-ui, -apple-system, sans-serif",
+            "labelFontSize": 12,
+            "labelBorderRadius": 5,
             "hudBgColor": "#0f172a",
             "hudTextColor": "#f8fafc",
             "hudAccentColor": "#38bdf8",
-            "hudOpacity": 0.9,
+            "hudOpacity": 0.88,
             "reduceMotion": false
         },
         "updates": {
@@ -593,6 +576,11 @@ pub fn default_frontend_config_json() -> Value {
             "autoDownload": false
         }
     })
+}
+
+/// Default frontend-compatible `camelCase` settings document for the detected host OS.
+pub fn default_frontend_config_json() -> Value {
+    default_frontend_config_json_for_os(detect_os())
 }
 
 /// Deep-merges `incoming` into `target` while preserving any unknown keys already in `target`.
@@ -661,6 +649,39 @@ impl ConfigStore {
         if let Ok(contents) = fs::read_to_string(&path) {
             if let Ok(parsed) = serde_json::from_str::<Value>(&contents) {
                 deep_merge_preserving_unknowns(&mut merged, &parsed);
+                let is_legacy_default_kb = get_json_path(&merged, "keybindings.toggleGrid")
+                    .and_then(Value::as_str)
+                    == Some("Alt+Space")
+                    && get_json_path(&merged, "keybindings.toggleLabelMode")
+                        .and_then(Value::as_str)
+                        == Some("Alt+Shift+Space")
+                    && get_json_path(&merged, "keybindings.toggleFreeMode")
+                        .and_then(Value::as_str)
+                        == Some("Alt+F")
+                    && get_json_path(&merged, "keybindings.middleClick")
+                        .and_then(Value::as_str)
+                        == Some("Alt+M")
+                    && get_json_path(&merged, "keybindings.openSettings")
+                        .and_then(Value::as_str)
+                        == Some("CmdOrCtrl+,");
+
+                if is_legacy_default_kb {
+                    if let Ok(native_kb) =
+                        serde_json::to_value(default_keybindings_for_os(detect_os()))
+                    {
+                        set_json_path(&mut merged, "keybindings", native_kb);
+                    }
+                } else if get_json_path(&merged, "keybindings.openSettings")
+                    .and_then(Value::as_str)
+                    == Some("CmdOrCtrl+,")
+                {
+                    let native_open = default_keybindings_for_os(detect_os()).open_settings;
+                    set_json_path(
+                        &mut merged,
+                        "keybindings.openSettings",
+                        Value::String(native_open),
+                    );
+                }
             }
         }
         Self {

@@ -1,5 +1,5 @@
 //! Cross-crate end-to-end integration tests bridging `ratpoison-hid`, `ratpoison-core`,
-//! `ratpoison-a11y`, and `ratpoison-license`.
+//! and `ratpoison-a11y`.
 //!
 //! Exercises:
 //! 1. `ratpoison-hid` mock hook + `CommandInterceptor` -> `ratpoison-core` state machine
@@ -8,15 +8,11 @@
 //! 2. `ratpoison-a11y` mock accessibility tree + Windows UIA / Linux AT-SPI2 adapters ->
 //!    home-row prefix-free label badge generation -> `ratpoison-core` `LabelMode` target
 //!    center coordinate mapping and auto-click synthesis.
-//! 3. `ratpoison-license` 14-day trial lifecycle, clock rollback detection, 5-machine seat
-//!    limit + deactivation dialog swap, offline/air-gapped Ed25519 challenge-response
-//!    activation token verification, and update manifest verification.
 //! 4. Cross-crate contract and serialization audit tests verifying where type conversion
 //!    bridges (`ratpoison_tests::*`) are required.
 
 use std::sync::{Arc, Mutex};
 
-use ed25519_dalek::SigningKey;
 use ratpoison_a11y::{
     AccessibilityBudget, AccessibilityProvider, AccessibleElement, ElementRole,
     LabelConfig as A11yLabelConfig, LogicalRect as A11yRect, MockAccessibilityProvider,
@@ -31,12 +27,6 @@ use ratpoison_hid::{
     ClickKind, CommandInterceptor, InterceptDecision, InterceptorAction, InterceptorConfig,
     KeyCode, KeyPhase, KeyboardHookBackend, MockHidBackend, MockMouseOp, Modifiers,
     MouseButton as HidMouseButton, MouseSimulatorBackend, RawKeyEvent, ScrollDelta,
-};
-use ratpoison_license::{
-    compute_machine_fingerprint, issue_offline_activation_token, normalize_and_hash_license_key,
-    ActivationMode, ActivationOutcome, LicenseError, LicenseManager, LicenseState,
-    MachineSeatSummary, CLOCK_ROLLBACK_TOLERANCE_SECS, MAX_MACHINES, OFFLINE_CHALLENGE_PREFIX,
-    OFFLINE_TOKEN_PREFIX, TRIAL_DURATION_SECS,
 };
 use ratpoison_tests::{
     bridge_a11y_badge_to_core, core_to_a11y_rect, core_to_hid_logical_point,
@@ -530,126 +520,6 @@ fn end_to_end_large_a11y_tree_prefix_free_two_char_hints_in_core_label_mode() {
     assert_eq!(
         engine.cursor_logical(),
         CoreLogicalPoint::new(two_char_badge.target.x, two_char_badge.target.y)
-    );
-}
-
-#[test]
-fn end_to_end_license_trial_5_machine_seats_and_airgapped_ed25519_verification() {
-    let secret_bytes: [u8; 32] = [0x5A; 32];
-    let signing_key = SigningKey::from_bytes(&secret_bytes);
-    let verifying_key = signing_key.verifying_key();
-
-    let make_seat = |idx: usize| -> MachineSeatSummary {
-        let fp = compute_machine_fingerprint(&format!("HW-UUID-2026-{idx:04}")).unwrap();
-        MachineSeatSummary {
-            machine_fingerprint: fp,
-            friendly_hostname: format!("dev-node-{idx}.local"),
-            os: "macos".to_string(),
-        }
-    };
-
-    let mut mgr = LicenseManager::new(make_seat(1), verifying_key);
-    let t0: u64 = 1_750_000_000;
-
-    // 1. 14-day trial lifecycle
-    assert_eq!(
-        mgr.evaluate_state(t0).unwrap(),
-        LicenseState::UnstartedTrial
-    );
-    let trial = mgr.start_trial(t0).unwrap();
-    assert!(trial.is_feature_unlocked());
-    assert_eq!(
-        mgr.evaluate_state(t0 + TRIAL_DURATION_SECS).unwrap(),
-        LicenseState::TrialExpired {
-            started_at: t0,
-            expired_at: t0 + TRIAL_DURATION_SECS,
-        }
-    );
-
-    // 2. Clock rollback protection (> 300s backward jump rejected)
-    let last_obs = t0 + TRIAL_DURATION_SECS;
-    let rollback_err = mgr
-        .evaluate_state(last_obs - CLOCK_ROLLBACK_TOLERANCE_SECS - 10)
-        .unwrap_err();
-    assert!(matches!(
-        rollback_err,
-        LicenseError::ClockRollbackDetected { .. }
-    ));
-
-    // 3. 5-machine seat limit and 6th-machine deactivation prompt
-    let license_key = "RP-TEAM-2026-1111-2222-3333";
-    let mut now = last_obs + 60;
-    for seat_idx in 1..=MAX_MACHINES {
-        now += 10;
-        let out = mgr
-            .activate_machine(license_key, make_seat(seat_idx), now)
-            .unwrap();
-        assert!(matches!(out, ActivationOutcome::Activated { .. }));
-    }
-    assert_eq!(mgr.active_seats().len(), 5);
-
-    // 6th machine triggers RequiresDeactivation with all 5 occupied seats
-    now += 10;
-    let seat_6 = make_seat(6);
-    let out_6 = mgr
-        .activate_machine(license_key, seat_6.clone(), now)
-        .unwrap();
-    match out_6 {
-        ActivationOutcome::RequiresDeactivation { prompt } => {
-            assert_eq!(prompt.max_machines, 5);
-            assert_eq!(prompt.occupied_seats.len(), 5);
-            assert_eq!(
-                prompt.attempting_machine.machine_fingerprint,
-                seat_6.machine_fingerprint
-            );
-        }
-        other => panic!("expected RequiresDeactivation, got {other:?}"),
-    }
-
-    // Deactivate seat #1 and replace with machine #6
-    let seat_1_fp = make_seat(1).machine_fingerprint;
-    now += 10;
-    let swapped = mgr
-        .deactivate_and_replace_seat(license_key, &seat_1_fp, now)
-        .unwrap();
-    assert!(matches!(
-        swapped,
-        ActivationOutcome::Activated { ref seat, .. }
-        if seat.seat_id == 1 && seat.machine_fingerprint == seat_6.machine_fingerprint
-    ));
-
-    // 4. Offline / Air-Gapped Ed25519 Challenge-Response activation
-    let airgap_seat = make_seat(42);
-    let mut airgap_mgr = LicenseManager::new(airgap_seat.clone(), verifying_key);
-    let challenge = airgap_mgr
-        .generate_offline_challenge(license_key, now)
-        .unwrap();
-    assert!(challenge.starts_with(OFFLINE_CHALLENGE_PREFIX));
-
-    let expires_at = Some(now + 180 * 86_400);
-    let token = issue_offline_activation_token(
-        &signing_key,
-        &challenge,
-        license_key,
-        2,
-        now + 30,
-        expires_at,
-    )
-    .unwrap();
-    assert!(token.starts_with(OFFLINE_TOKEN_PREFIX));
-
-    let activated_state = airgap_mgr.apply_offline_response(&token, now + 60).unwrap();
-    assert!(activated_state.is_feature_unlocked());
-    assert_eq!(
-        activated_state,
-        LicenseState::Licensed {
-            mode: ActivationMode::OfflineChallengeResponse,
-            license_key_hash: normalize_and_hash_license_key(license_key).unwrap(),
-            machine_fingerprint: airgap_seat.machine_fingerprint,
-            seat_id: 2,
-            activated_at: now + 30,
-            expires_at,
-        }
     );
 }
 

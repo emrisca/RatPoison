@@ -1,10 +1,10 @@
 //! Cross-crate runtime wiring connecting `ratpoison-core`, `ratpoison-hid`,
-//! `ratpoison-a11y`, and `ratpoison-license` inside the Tauri v2 desktop shell.
+//! and `ratpoison-a11y` inside the Tauri v2 desktop shell.
 
 use crate::ipc::{
-    format_unix_iso8601, license_state_to_dto, project_snapshot_to_overlay_payload,
-    resolve_data_dir, unix_timestamp_secs, ConfigStore, LicenseStatusDto, MonitorDto,
-    OfflineChallengeDto, OverlayStatePayloadDto, UpdateCheckResultDto, EVENT_OVERLAY_STATE,
+    detect_platform_info, format_unix_iso8601, project_snapshot_to_overlay_payload,
+    resolve_data_dir, unix_timestamp_secs, ConfigStore, MonitorDto, OverlayStatePayloadDto,
+    PlatformInfoDto, UpdateCheckResultDto, EVENT_OVERLAY_STATE,
 };
 use ratpoison_a11y::{
     default_platform_provider, generate_label_badges, AccessibilityBudget, AccessibilityProvider,
@@ -19,22 +19,15 @@ use ratpoison_hid::{
     InterceptorConfig, LogicalPoint as HidLogicalPoint, MouseButton as HidMouseButton,
     MouseSimulatorBackend, PermissionReport, ScrollDelta,
 };
-use ratpoison_license::{
-    compute_machine_fingerprint, detect_current_machine_fingerprint, detect_flatpak_sandbox,
-    evaluate_update, parse_update_manifest, ActivationOutcome, LicenseManager, MachineSeatSummary,
-    UpdateChannel, UpdateCheckDecision,
-};
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager};
 
 pub struct AppRuntime {
     pub config_store: ConfigStore,
     pub engine: CoreEngine,
-    pub license_manager: LicenseManager,
     pub interceptor: CommandInterceptor<5>,
     pub mouse_sim: Box<dyn MouseSimulatorBackend>,
     pub a11y_provider: Box<dyn AccessibilityProvider>,
     pub permissions: PermissionReport,
-    pub last_license_key_for_offline: Option<String>,
 }
 
 impl AppRuntime {
@@ -62,32 +55,6 @@ impl AppRuntime {
         };
 
         let engine = CoreEngine::new(core_config, layout);
-
-        let machine_fp = detect_current_machine_fingerprint()
-            .or_else(|_| compute_machine_fingerprint("ratpoison-fallback-host-id"))
-            .unwrap_or_else(|_| "0000000000000000".to_string());
-
-        let hostname = std::env::var("HOSTNAME")
-            .or_else(|_| std::env::var("COMPUTERNAME"))
-            .unwrap_or_else(|_| "local-workstation".to_string());
-
-        let machine_summary = MachineSeatSummary {
-            machine_fingerprint: machine_fp,
-            friendly_hostname: hostname,
-            os: std::env::consts::OS.to_string(),
-        };
-
-        let license_path = data_dir.join("license.json");
-        let mut license_manager = LicenseManager::with_default_key(machine_summary)
-            .expect("embedded Ed25519 verifying key is valid")
-            .with_storage_path(&license_path);
-        let now = unix_timestamp_secs();
-        if let Ok(ratpoison_license::LicenseState::UnstartedTrial) =
-            license_manager.evaluate_state(now)
-        {
-            let _ = license_manager.start_trial(now);
-        }
-
         let interceptor = CommandInterceptor::<5>::new(InterceptorConfig::default());
         let mouse_sim = create_platform_mouse_simulator();
         let a11y_provider = default_platform_provider();
@@ -96,12 +63,10 @@ impl AppRuntime {
         Self {
             config_store,
             engine,
-            license_manager,
             interceptor,
             mouse_sim,
             a11y_provider,
             permissions,
-            last_license_key_for_offline: None,
         }
     }
 
@@ -114,162 +79,46 @@ impl AppRuntime {
             .collect()
     }
 
-    pub fn license_status_dto(&mut self) -> Result<LicenseStatusDto, String> {
-        let now = unix_timestamp_secs();
-        let state = self
-            .license_manager
-            .evaluate_state(now)
-            .map_err(|e| e.to_string())?;
-        Ok(license_state_to_dto(
-            &state,
-            &self.license_manager.current_machine().machine_fingerprint,
-            self.license_manager.active_seats().len(),
-        ))
-    }
-
-    pub fn activate_license(&mut self, license_key: &str) -> Result<LicenseStatusDto, String> {
-        let now = unix_timestamp_secs();
-        let machine = self.license_manager.current_machine().clone();
-        self.last_license_key_for_offline = Some(license_key.to_string());
-        match self
-            .license_manager
-            .activate_machine(license_key, machine, now)
-            .map_err(|e| e.to_string())?
-        {
-            ActivationOutcome::Activated { state, .. } => Ok(license_state_to_dto(
-                &state,
-                &self.license_manager.current_machine().machine_fingerprint,
-                self.license_manager.active_seats().len(),
-            )),
-            ActivationOutcome::RequiresDeactivation { prompt } => Err(format!(
-                "All {} seats are active ({}). Deactivate a seat before activating this machine.",
-                prompt.max_machines,
-                prompt
-                    .occupied_seats
-                    .iter()
-                    .map(|s| s.friendly_hostname.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
-        }
-    }
-
-    pub fn deactivate_current_machine(&mut self) -> Result<LicenseStatusDto, String> {
-        let fp = self
-            .license_manager
-            .current_machine()
-            .machine_fingerprint
-            .clone();
-        let _ = self.license_manager.deactivate_seat(&fp);
-        self.license_status_dto()
-    }
-
-    pub fn generate_offline_challenge(&self) -> Result<OfflineChallengeDto, String> {
-        let now = unix_timestamp_secs();
-        let key_hint = self
-            .last_license_key_for_offline
-            .as_deref()
-            .unwrap_or("RP-OFFLINE-REQUEST-0001");
-        let challenge_code = self
-            .license_manager
-            .generate_offline_challenge(key_hint, now)
-            .map_err(|e| e.to_string())?;
-        Ok(OfflineChallengeDto {
-            challenge_code,
-            machine_fingerprint: self
-                .license_manager
-                .current_machine()
-                .machine_fingerprint
-                .clone(),
-            issued_at: format_unix_iso8601(now),
-        })
-    }
-
-    pub fn apply_offline_response(&mut self, response_blob: &str) -> Result<LicenseStatusDto, String> {
-        let now = unix_timestamp_secs();
-        let state = self
-            .license_manager
-            .apply_offline_response(response_blob.trim(), now)
-            .map_err(|e| e.to_string())?;
-        Ok(license_state_to_dto(
-            &state,
-            &self.license_manager.current_machine().machine_fingerprint,
-            self.license_manager.active_seats().len(),
-        ))
+    pub fn platform_info_dto(&self) -> PlatformInfoDto {
+        detect_platform_info()
     }
 
     pub fn check_for_updates(&self, channel_str: &str) -> Result<UpdateCheckResultDto, String> {
         let current_str = env!("CARGO_PKG_VERSION");
         let channel = if channel_str.eq_ignore_ascii_case("beta") {
-            UpdateChannel::Beta
+            "beta"
         } else {
-            UpdateChannel::Stable
+            "stable"
         };
         let now_iso = format_unix_iso8601(unix_timestamp_secs());
-        let is_flatpak = detect_flatpak_sandbox();
-        let target_key = format!(
-            "{}-{}",
-            match std::env::consts::OS {
-                "macos" => "darwin",
-                other => other,
-            },
-            std::env::consts::ARCH
-        );
+        let is_flatpak =
+            std::env::var_os("FLATPAK_ID").is_some() || std::path::Path::new("/.flatpak-info").exists();
 
-        let baseline_manifest = serde_json::json!({
-            "version": current_str,
-            "notes": "You are running the latest verified build of RatPoison.",
-            "pub_date": now_iso,
-            "channel": if channel == UpdateChannel::Beta { "beta" } else { "stable" },
-            "platforms": {
-                target_key.clone(): {
-                    "url": "https://github.com/emrisca/RatPoison/releases/latest",
-                    "signature": "BASELINE_LOCAL_CHECK"
-                }
-            }
+        let release_notes = if is_flatpak {
+            format!(
+                "RatPoison v{current_str} ({channel} channel) is managed via Flatpak (`flatpak update io.github.emrisca.RatPoison`)."
+            )
+        } else {
+            format!(
+                "RatPoison v{current_str} ({channel} channel) — open-source MIT builds are published at https://github.com/emrisca/RatPoison/releases."
+            )
+        };
+
+        Ok(UpdateCheckResultDto {
+            current_version: current_str.to_string(),
+            latest_version: current_str.to_string(),
+            update_available: false,
+            release_notes,
+            published_at: now_iso,
+            download_url: Some("https://github.com/emrisca/RatPoison/releases".to_string()),
         })
-        .to_string();
+    }
 
-        let manifest = parse_update_manifest(&baseline_manifest).map_err(|e| e.to_string())?;
-        let decision = evaluate_update(&manifest, current_str, channel, &target_key, is_flatpak)
-            .map_err(|e| e.to_string())?;
-
-        match decision {
-            UpdateCheckDecision::ManagedByPackageManager { command_hint, .. } => {
-                Ok(UpdateCheckResultDto {
-                    current_version: current_str.to_string(),
-                    latest_version: current_str.to_string(),
-                    update_available: false,
-                    release_notes: format!(
-                        "Managed by Flatpak sandbox. Run `{command_hint}` to update."
-                    ),
-                    published_at: now_iso,
-                    download_url: None,
-                })
-            }
-            UpdateCheckDecision::UpdateAvailable {
-                new_version,
-                artifact,
-                notes,
-                pub_date,
-                ..
-            } => Ok(UpdateCheckResultDto {
-                current_version: current_str.to_string(),
-                latest_version: new_version,
-                update_available: true,
-                release_notes: notes.unwrap_or_else(|| "New RatPoison update available.".to_string()),
-                published_at: pub_date.unwrap_or(now_iso),
-                download_url: Some(artifact.url),
-            }),
-            UpdateCheckDecision::UpToDate { .. } => Ok(UpdateCheckResultDto {
-                current_version: current_str.to_string(),
-                latest_version: current_str.to_string(),
-                update_available: false,
-                release_notes: "You are running the latest verified build of RatPoison.".to_string(),
-                published_at: now_iso,
-                download_url: None,
-            }),
-        }
+    pub fn sync_core_config_from_store(&mut self) {
+        let updated = self.config_store.to_core_config();
+        let _ = self
+            .engine
+            .handle_event(EngineEvent::ConfigUpdated { config: Box::new(updated) });
     }
 
     fn scale_for_monitor(&self, monitor_id: &str) -> f64 {
@@ -280,18 +129,18 @@ impl AppRuntime {
             .unwrap_or(1.0)
     }
 
-    /// Dispatches an `EngineEvent` through `CoreEngine` and executes all emitted `EngineEffect`s
-    /// across `ratpoison-hid`, `ratpoison-a11y`, and the Tauri overlay WebView.
+    /// Feeds an `EngineEvent` into `ratpoison-core`, executes all resulting HID/A11y/window
+    /// effects, and emits a camelCase, window-relative `ratpoison://overlay-state` payload.
     pub fn dispatch_event(
         &mut self,
         event: EngineEvent,
         app: Option<&AppHandle>,
     ) -> OverlayStatePayloadDto {
-        let output = self.engine.handle_event(event);
+        let step = self.engine.handle_event(event);
         let mut latest_payload =
-            project_snapshot_to_overlay_payload(&output.snapshot, self.engine.config());
+            project_snapshot_to_overlay_payload(&step.snapshot, self.engine.config());
 
-        for effect in output.effects {
+        for effect in step.effects {
             match effect {
                 EngineEffect::MoveCursor {
                     logical,

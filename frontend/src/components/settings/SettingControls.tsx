@@ -1,6 +1,7 @@
 import { useState, type KeyboardEvent } from 'react';
 import { AlertTriangle, Keyboard } from 'lucide-react';
 import { FONT_FAMILY_PRESETS, getByPath } from '../../config/defaults';
+import type { PlatformOs } from '../../types/ipc';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { SettingRow } from './SettingRow';
 
@@ -168,15 +169,27 @@ function FontFamilyControl({ path }: { path: string }) {
   );
 }
 
-function formatKeyEvent(e: KeyboardEvent<HTMLButtonElement>): string | null {
+function formatKeyEvent(e: KeyboardEvent<HTMLButtonElement>, os: PlatformOs): string | null {
   const ignoreOnly = new Set(['Meta', 'Control', 'Alt', 'Shift']);
   if (ignoreOnly.has(e.key)) return null;
 
   const parts: string[] = [];
-  if (e.metaKey) parts.push('Cmd');
-  if (e.ctrlKey) parts.push('Ctrl');
-  if (e.altKey) parts.push('Alt');
-  if (e.shiftKey) parts.push('Shift');
+  if (os === 'macos') {
+    if (e.ctrlKey) parts.push('Ctrl');
+    if (e.altKey) parts.push('Option');
+    if (e.shiftKey) parts.push('Shift');
+    if (e.metaKey) parts.push('Cmd');
+  } else if (os === 'windows') {
+    if (e.ctrlKey) parts.push('Ctrl');
+    if (e.altKey) parts.push('Alt');
+    if (e.shiftKey) parts.push('Shift');
+    if (e.metaKey) parts.push('Win');
+  } else {
+    if (e.metaKey) parts.push('Super');
+    if (e.ctrlKey) parts.push('Ctrl');
+    if (e.altKey) parts.push('Alt');
+    if (e.shiftKey) parts.push('Shift');
+  }
 
   let keyName = e.key;
   if (keyName === ' ') keyName = 'Space';
@@ -189,6 +202,7 @@ function formatKeyEvent(e: KeyboardEvent<HTMLButtonElement>): string | null {
 function HotkeyRecorderControl({ path }: { path: string }) {
   const value = useSettingsStore((s) => String(getByPath(s.config, path) ?? ''));
   const keybindings = useSettingsStore((s) => s.config.keybindings);
+  const platformOs = useSettingsStore((s) => s.platform.os);
   const updateSetting = useSettingsStore((s) => s.updateSetting);
   const [recording, setRecording] = useState(false);
 
@@ -208,7 +222,7 @@ function HotkeyRecorderControl({ path }: { path: string }) {
       return;
     }
 
-    const chord = formatKeyEvent(e);
+    const chord = formatKeyEvent(e, platformOs);
     if (chord) {
       void updateSetting(path, chord);
       setRecording(false);
