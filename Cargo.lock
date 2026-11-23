@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "ratpoison-a11y"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "serde",
  "thiserror",
@@ -42,7 +42,7 @@ dependencies = [
 
 [[package]]
 name = "ratpoison-core"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -51,7 +51,7 @@ dependencies = [
 
 [[package]]
 name = "ratpoison-hid"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "serde",
  "thiserror",
@@ -60,7 +60,7 @@ dependencies = [
 
 [[package]]
 name = "ratpoison-tests"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "ratpoison-a11y",
  "ratpoison-core",
