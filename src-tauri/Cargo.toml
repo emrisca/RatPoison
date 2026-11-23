@@ -1,6 +1,6 @@
 [package]
 name = "ratpoison"
-version = "0.1.6"
+version = "0.1.7"
 description = "RatPoison — Lightning-fast, memory-safe, FOSS keyboard-driven mouse control utility"
 authors = ["Emrisca"]
 license = "MIT"
